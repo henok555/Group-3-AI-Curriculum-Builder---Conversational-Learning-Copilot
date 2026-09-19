@@ -78,6 +78,7 @@ async def call_gemma(
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "reasoning": {"max_tokens": 0},
     }
     if response_format:
         payload["response_format"] = response_format
@@ -100,7 +101,11 @@ async def call_gemma(
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+                msg = data["choices"][0]["message"]
+                content = msg.get("content")
+                if not content or not content.strip():
+                    content = msg.get("reasoning", "")
+                return (content or "").strip()
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429 and attempt < max_attempts:
                     # Rate limited — exponential backoff (10s, 20s, 40s)

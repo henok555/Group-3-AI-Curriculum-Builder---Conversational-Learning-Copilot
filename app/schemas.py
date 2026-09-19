@@ -58,7 +58,7 @@ Gender = Literal["MALE", "FEMALE"]
 # Mirrors trainees.marital_status CHECK
 MaritalStatus = Literal["SINGLE", "MARRIED", "DIVORCED", "WIDOWED", "PREFER_NOT_TO_SAY"]
 
-# Bloom's Taxonomy cognitive levels (AI-generated — not in DB schema)
+# Bloom's Taxonomy cognitive levels (not in DB schema)
 BloomLevel = Literal["Remember", "Understand", "Apply", "Analyze", "Evaluate", "Create"]
 
 

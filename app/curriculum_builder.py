@@ -255,7 +255,7 @@ def build_curriculum_prompt(
     audience_block = "\n".join(audience_lines)
 
     # Objective IDs for mapping instructions
-    obj_ids_sample = ", ".join(f'"{o["id"]}"' for o in all_objectives[:8])
+    obj_ids_sample = ", ".join(f'"{o["id"]}"' for o in all_objectives[:8]) if all_objectives else '"obj-1", "obj-2"'
 
     return f"""\
 Generate a complete, pedagogically sound curriculum for the following TSP training.
@@ -263,14 +263,17 @@ Generate a complete, pedagogically sound curriculum for the following TSP traini
 ═══════════════════════════════════════════════
 TRAINING OVERVIEW
 ═══════════════════════════════════════════════
-training_id:  {training_id}
-Title:        {training.get('title', 'Unknown')}
-Rationale:    {training.get('rationale', 'N/A')}
-Scope:        {training.get('scope', 'N/A')}
-Delivery:     {training.get('delivery_method', 'N/A')}
-Duration:     {training.get('duration', '?')} {training.get('duration_type', 'HOURS')}
-Keywords:     {', '.join(training_profile.get('keywords', [])) or 'N/A'}
-Purposes:     {', '.join(training_profile.get('purposes', [])) or 'N/A'}
+training_id:   {training_id}
+Title:         {training.get('title', 'Unknown')}
+Organization:  {training.get('company_name', 'N/A')}
+Industry:      {training.get('industry_type', 'N/A')} ({training.get('business_type', 'N/A')})
+Rationale:     {training.get('rationale', 'N/A')}
+Scope:         {training.get('scope', 'N/A')}
+Delivery:      {training.get('delivery_method', 'N/A')}
+Duration:      {training.get('duration', '?')} {training.get('duration_type', 'HOURS')}
+Participants:  {training.get('total_participants', 'N/A')}
+Keywords:      {', '.join(training_profile.get('keywords', [])) or 'N/A'}
+Purposes:      {', '.join(training_profile.get('purposes', [])) or 'N/A'}
 
 ═══════════════════════════════════════════════
 AUDIENCE PROFILE
@@ -287,21 +290,21 @@ TRAINING OBJECTIVES  (use these IDs in objectives_mapping and module.objective_i
 
 ═══════════════════════════════════════════════
 TSP MODULES AND ACCEPTED CONTENT
-(Use each module's actual description, key concepts, teaching strategy, differentiation
-strategies, inclusion strategy, materials, and lesson objectives as the foundation.
-Do NOT replace or ignore any field that already has content — enrich, don't invent.)
+(If modules exist below, use their description, key concepts, teaching strategy, and lessons as foundation.
+Enrich existing content without discarding it. If no modules are defined yet, generate 3–5 modules derived
+directly from the title, rationale, and scope above.)
 ═══════════════════════════════════════════════
 {modules_block}
 
 ═══════════════════════════════════════════════
 GENERATION INSTRUCTIONS
 ═══════════════════════════════════════════════
-1.  Create 3–5 modules — use the existing TSP module structure as the foundation
+1.  Create 3–5 modules — use existing TSP module structure if provided, or construct from title/scope if empty
 2.  Each module: 2–4 lessons, each with a Bloom's-aligned objective and bloom_level field
 3.  Each module: exactly 1 assignment (type: individual | group | practical | written | presentation)
 4.  Each module: exactly 1 assessment (type: quiz | exam | project | portfolio | presentation | practical)
 5.  Each module: exactly 1 rubric with EXACTLY 3 criteria, weights [0.33, 0.33, 0.34]
-6.  Fill module.objective_ids with the relevant objective IDs from the list above
+6.  Fill module.objective_ids with objective IDs from the list above (or generated objective IDs if none were predefined)
 7.  Fill top-level objectives_mapping: {{ "objective_id": ["mod-id", ...] }}
 8.  Reference accepted content IDs in lesson.content_references where relevant
 9.  Set duration_type to "HOURS" throughout (matches TSP DB convention)
@@ -433,12 +436,24 @@ def _normalize_llm_output(data: dict) -> dict:
         # order / module_order
         if "module_order" not in mod:
             mod["module_order"] = mod.pop("order", i + 1)
+        # String fields that LLMs sometimes output as lists or None
+        string_fields = [
+            "key_concepts", "teaching_strategy", "differentiation_strategies",
+            "inclusion_strategy", "primary_materials", "secondary_materials", "digital_tools"
+        ]
+        for sf in string_fields:
+            val = mod.get(sf)
+            if isinstance(val, list):
+                mod[sf] = ", ".join(str(item) for item in val if item) or None
+            elif val is not None and not isinstance(val, str):
+                mod[sf] = str(val)
+
         # key_concepts fallback
-        if "key_concepts" not in mod:
-            mod["key_concepts"] = mod.get("description", mod.get("name", ""))
+        if not mod.get("key_concepts"):
+            mod["key_concepts"] = mod.get("description") or mod.get("name") or "Core concepts"
         # description fallback
-        if "description" not in mod:
-            mod["description"] = mod.get("key_concepts", mod.get("name", ""))
+        if not mod.get("description"):
+            mod["description"] = mod.get("key_concepts") or mod.get("name") or "Module description"
         # duration fallback
         if "duration" not in mod:
             mod["duration"] = mod.pop("duration_hours", 2.0)
