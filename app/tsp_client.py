@@ -297,59 +297,75 @@ class TSPClient:
 
     async def get_learner_profile(self, learner_id: str) -> dict:
         """
-        Get learner (trainee) profile with user info and demographics.
-        learner_id can be trainee.id or user.id — we try both.
+        Get learner (trainee) profile with joined user, role, and lookup data.
+
+        Explicitly selects trainee columns to avoid column shadowing issues
+        that arise from SELECT tr.* when JOINed with users (both have first_name, last_name).
+
+        learner_id may be trainee.id or user.id — tries trainee.id first.
+        Returns empty dict if not found.
         """
+        TRAINEE_SELECT = """
+            SELECT
+                tr.id,
+                tr.training_id,
+                tr.user_id,
+                tr.first_name,
+                tr.last_name,
+                tr.middle_name,
+                tr.email,
+                tr.contact_phone,
+                tr.gender,
+                tr.date_of_birth,
+                tr.field_of_study,
+                tr.employment_status,
+                tr.marital_status,
+                tr.has_smart_phone,
+                tr.has_training_experience,
+                tr.training_experience_description,
+                tr.number_of_children,
+                tr.woreda,
+                tr.house_number,
+                tr.cohort_id,
+                tr.is_self_registered,
+                tr.created_at,
+                tr.updated_at,
+                -- User account fields
+                u.username,
+                u.email          AS user_email,
+                u.phone_number,
+                u.profile_picture_url,
+                u.is_active,
+                -- Role
+                r.name           AS role_name,
+                -- Lookup denormalisations
+                al.name          AS academic_level,
+                al.code          AS academic_level_code,
+                l.name           AS language_name,
+                l.code           AS language_code,
+                c.name           AS city_name,
+                z.name           AS zone_name
+            FROM trainees tr
+            LEFT JOIN users u                   ON u.id  = tr.user_id
+            LEFT JOIN roles r                   ON r.id  = u.role_id
+            LEFT JOIN base_data.academic_levels al ON al.id = tr.academic_level_id
+            LEFT JOIN base_data.languages l     ON l.id  = tr.language_id
+            LEFT JOIN base_data.cities c        ON c.id  = tr.city_id
+            LEFT JOIN base_data.zones z         ON z.id  = tr.zone_id
+        """
+
         async with self._pool.acquire() as conn:
-            # Try as trainee.id first
-            trainee_row = await conn.fetchrow("""
-                SELECT tr.*, u.email as user_email, u.username, u.first_name as user_first_name,
-                       u.last_name as user_last_name, u.profile_picture_url, r.name as role_name,
-                       al.name as academic_level, l.name as language_name, l.code as language_code,
-                       c.name as city_name, z.name as zone_name
-                FROM trainees tr
-                LEFT JOIN users u ON u.id = tr.user_id
-                LEFT JOIN roles r ON r.id = u.role_id
-                LEFT JOIN base_data.academic_levels al ON al.id = tr.academic_level_id
-                LEFT JOIN base_data.languages l ON l.id = tr.language_id
-                LEFT JOIN base_data.cities c ON c.id = tr.city_id
-                LEFT JOIN base_data.zones z ON z.id = tr.zone_id
-                WHERE tr.id = $1
-            """, learner_id)
+            # 1. Try trainee primary key
+            row = await conn.fetchrow(TRAINEE_SELECT + " WHERE tr.id = $1", learner_id)
+            if row:
+                return dict(row)
 
-            if trainee_row:
-                return dict(trainee_row)
+            # 2. Try user.id → trainee lookup
+            row = await conn.fetchrow(TRAINEE_SELECT + " WHERE tr.user_id = $1", learner_id)
+            if row:
+                return dict(row)
 
-            # Try as user.id (find trainee via user_id)
-            trainee_row = await conn.fetchrow("""
-                SELECT tr.*, u.email as user_email, u.username, u.first_name as user_first_name,
-                       u.last_name as user_last_name, u.profile_picture_url, r.name as role_name,
-                       al.name as academic_level, l.name as language_name, l.code as language_code,
-                       c.name as city_name, z.name as zone_name
-                FROM trainees tr
-                LEFT JOIN users u ON u.id = tr.user_id
-                LEFT JOIN roles r ON r.id = u.role_id
-                LEFT JOIN base_data.academic_levels al ON al.id = tr.academic_level_id
-                LEFT JOIN base_data.languages l ON l.id = tr.language_id
-                LEFT JOIN base_data.cities c ON c.id = tr.city_id
-                LEFT JOIN base_data.zones z ON z.id = tr.zone_id
-                WHERE tr.user_id = $1
-            """, learner_id)
-
-            if trainee_row:
-                return dict(trainee_row)
-
-            # Fallback: just user
-            user_row = await conn.fetchrow("""
-                SELECT u.*, r.name as role_name
-                FROM users u
-                LEFT JOIN roles r ON r.id = u.role_id
-                WHERE u.id = $1
-            """, learner_id)
-
-            return dict(user_row) if user_row else {}
-
-    # ==================== Accepted Content ====================
+            return {}
 
     async def get_accepted_content(self, training_id: str) -> list[dict]:
         """Get all ACCEPTED content for a training (for RAG indexing)."""
@@ -387,6 +403,27 @@ class TSPClient:
                 RETURNING id
             """, training_id, curr_json)
             return str(row["id"])
+
+    async def get_latest_curriculum(self, training_id: str) -> Optional[dict]:
+        """
+        Retrieve the most recently generated curriculum for a training.
+        Returns None if no curriculum has been generated yet.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT curriculum_json, generated_at, id
+                FROM ai_generated_curricula
+                WHERE training_id = $1
+                ORDER BY generated_at DESC
+                LIMIT 1
+            """, training_id)
+            if not row:
+                return None
+            data = dict(row["curriculum_json"])
+            data.setdefault("metadata", {})
+            data["metadata"]["curriculum_db_id"] = str(row["id"])
+            data["metadata"]["generated_at_db"] = str(row["generated_at"])
+            return data
 
     async def is_learner_enrolled(self, learner_id: str, training_id: str) -> bool:
         """Check if a trainee is enrolled in the specified training."""
