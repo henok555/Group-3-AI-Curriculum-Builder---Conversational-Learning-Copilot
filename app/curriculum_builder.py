@@ -408,6 +408,65 @@ def _make_default_rubric(module_id: str, module_name: str) -> dict:
     }
 
 
+def _normalize_llm_output(data: dict) -> dict:
+    """
+    Remap common LLM field-name variations to match our Pydantic schema.
+
+    LLMs frequently use 'title' instead of 'name', omit 'module_order',
+    use 'order' instead, etc. This function normalises these before
+    Pydantic validation so generation never fails on trivial naming issues.
+    """
+    for i, mod in enumerate(data.get("modules", [])):
+        # title → name
+        if "name" not in mod and "title" in mod:
+            mod["name"] = mod.pop("title")
+        # order / module_order
+        if "module_order" not in mod:
+            mod["module_order"] = mod.pop("order", i + 1)
+        # key_concepts fallback
+        if "key_concepts" not in mod:
+            mod["key_concepts"] = mod.get("description", mod.get("name", ""))
+        # description fallback
+        if "description" not in mod:
+            mod["description"] = mod.get("key_concepts", mod.get("name", ""))
+        # duration fallback
+        if "duration" not in mod:
+            mod["duration"] = mod.pop("duration_hours", 2.0)
+        if "duration_type" not in mod:
+            mod["duration_type"] = "HOURS"
+
+        # Lessons
+        for lesson in mod.get("lessons", []):
+            if "name" not in lesson and "title" in lesson:
+                lesson["name"] = lesson.pop("title")
+            if "description" not in lesson:
+                lesson["description"] = lesson.get("objective", lesson.get("name", ""))
+            if "duration" not in lesson:
+                lesson["duration"] = lesson.pop("duration_hours", 1.0)
+            if "duration_type" not in lesson:
+                lesson["duration_type"] = "HOURS"
+            if "objective" not in lesson:
+                lesson["objective"] = lesson.get("description", "")
+
+        # Assignments
+        for asgn in mod.get("assignments", []):
+            if "description" not in asgn:
+                asgn["description"] = asgn.get("title", "Assignment")
+            if "estimated_hours" not in asgn:
+                asgn["estimated_hours"] = 2.0
+
+        # Assessments
+        for asmt in mod.get("assessments", []):
+            if "description" not in asmt:
+                asmt["description"] = asmt.get("title", "Assessment")
+            if "questions" not in asmt:
+                asmt["questions"] = []
+            if "duration_minutes" not in asmt:
+                asmt["duration_minutes"] = 30
+
+    return data
+
+
 def validate_and_fix_curriculum(
     curriculum_data: dict,
 ) -> tuple[dict, CurriculumValidationReport]:
@@ -415,6 +474,7 @@ def validate_and_fix_curriculum(
     Post-generation validation and auto-correction pass.
 
     Problems fixed automatically (never raises — always returns corrected data):
+      0. LLM field-name normalization (title→name, order→module_order, etc.)
       1. Rubric weight normalization  (weights must sum ≈ 1.0)
       2. Rubric criteria padding      (rubrics must have ≥ 3 criteria)
       3. Module completeness          (every module needs assignment + assessment + rubric)
@@ -425,6 +485,9 @@ def validate_and_fix_curriculum(
         (fixed_curriculum_data, CurriculumValidationReport) — report documents all changes.
     """
     report = CurriculumValidationReport()
+
+    # ── 0. Normalize LLM field names ────────────────────────────────────
+    curriculum_data = _normalize_llm_output(curriculum_data)
 
     for mod in curriculum_data.get("modules", []):
         mod_id  = str(mod.get("id", "unknown"))

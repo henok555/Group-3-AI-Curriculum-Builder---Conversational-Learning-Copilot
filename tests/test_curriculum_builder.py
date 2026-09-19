@@ -15,6 +15,7 @@ from app.curriculum_builder import (
     BLOOM_VERBS,
     _flatten_objectives,
     _normalize_weights,
+    _normalize_llm_output,
     _make_default_criterion,
     _make_default_assignment,
     _make_default_assessment,
@@ -343,3 +344,61 @@ def test_build_curriculum_prompt_includes_bloom_verbs():
     prompt = build_curriculum_prompt(training_profile, [], audience, "uuid-1")
     # Intermediate → Apply, Advanced → Analyze
     assert "Analyze" in prompt or "analyze" in prompt
+
+
+# ---------------------------------------------------------------------------
+# 7. _normalize_llm_output — field-name remapping
+# ---------------------------------------------------------------------------
+
+def test_normalize_llm_output_remaps_title_to_name():
+    """LLM uses 'title' instead of 'name' — normalizer must remap."""
+    data = {"modules": [{
+        "id": "mod-1", "title": "Module Title", "description": "desc",
+        "lessons": [{"id": "l1", "title": "Lesson Title", "objective": "obj", "duration": 1.0}],
+        "assignments": [], "assessments": [], "rubrics": [],
+    }]}
+    result = _normalize_llm_output(data)
+    assert result["modules"][0]["name"] == "Module Title"
+    assert "title" not in result["modules"][0]
+    assert result["modules"][0]["lessons"][0]["name"] == "Lesson Title"
+
+
+def test_normalize_llm_output_fills_missing_module_order():
+    data = {"modules": [
+        {"id": "a", "name": "First", "lessons": [], "assignments": [], "assessments": [], "rubrics": []},
+        {"id": "b", "name": "Second", "lessons": [], "assignments": [], "assessments": [], "rubrics": []},
+    ]}
+    result = _normalize_llm_output(data)
+    assert result["modules"][0]["module_order"] == 1
+    assert result["modules"][1]["module_order"] == 2
+
+
+def test_normalize_llm_output_fills_key_concepts_from_description():
+    data = {"modules": [{
+        "id": "m1", "name": "M", "description": "A detailed description",
+        "lessons": [], "assignments": [], "assessments": [], "rubrics": [],
+    }]}
+    result = _normalize_llm_output(data)
+    assert result["modules"][0]["key_concepts"] == "A detailed description"
+
+
+def test_normalize_then_validate_handles_llm_style_output():
+    """Full pipeline: LLM-style output → normalize → validate → no crash."""
+    data = _wrap([{
+        "id": "mod-1", "title": "LLM Module",
+        "description": "desc", "duration_hours": 3.0,
+        "lessons": [
+            {"id": "l1", "title": "Lesson 1", "objective": "obj", "duration_hours": 1.0},
+        ],
+        "assignments": [],
+        "assessments": [],
+        "rubrics": [],
+    }])
+    fixed, report = validate_and_fix_curriculum(data)
+    mod = fixed["modules"][0]
+    assert mod["name"] == "LLM Module"
+    assert mod["module_order"] == 1
+    assert mod["key_concepts"] == "desc"
+    assert mod["lessons"][0]["name"] == "Lesson 1"
+    assert report.modules_assignment_added >= 1
+    assert report.modules_rubric_added >= 1
