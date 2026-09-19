@@ -24,7 +24,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -91,9 +91,7 @@ class TrainingInfo(BaseModel):
     company_name: Optional[str] = None
     training_type_name: Optional[str] = None
 
-    class Config:
-        # Allow extra fields from DB rows without raising errors
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")  # silently ignore extra DB columns
 
 
 class AudienceProfile(BaseModel):
@@ -122,8 +120,7 @@ class AudienceProfile(BaseModel):
     # From public.specific_prerequisites (one-to-many, collected as list)
     specific_prerequisites: List[str] = Field(default_factory=list)
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class Outcome(BaseModel):
@@ -132,8 +129,7 @@ class Outcome(BaseModel):
     definition: Optional[str] = None
     objective_id: Optional[UUID] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class Objective(BaseModel):
@@ -148,8 +144,7 @@ class Objective(BaseModel):
     children: List["Objective"] = Field(default_factory=list)
     outcomes: List[Outcome] = Field(default_factory=list)
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 Objective.model_rebuild()  # required for self-referential model
 
@@ -159,8 +154,7 @@ class InstructionalMethod(BaseModel):
     name: str
     description: Optional[str] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class ContentItem(BaseModel):
@@ -179,8 +173,7 @@ class ContentItem(BaseModel):
     module_id: Optional[UUID] = None
     lesson_id: Optional[UUID] = None
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class LessonInfo(BaseModel):
@@ -201,8 +194,7 @@ class LessonInfo(BaseModel):
     # Joined from lesson_technology_integrations + base_data.technology_integrations
     technology_integrations: List[InstructionalMethod] = Field(default_factory=list)
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class ModuleInfo(BaseModel):
@@ -237,8 +229,7 @@ class ModuleInfo(BaseModel):
     lessons: List[LessonInfo] = Field(default_factory=list)
     accepted_contents: List[ContentItem] = Field(default_factory=list)
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class LearnerProfile(BaseModel):
@@ -287,8 +278,7 @@ class LearnerProfile(BaseModel):
         parts = [p for p in [self.first_name, self.last_name] if p]
         return " ".join(parts) or self.username or str(self.id)
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 # ---------------------------------------------------------------------------
