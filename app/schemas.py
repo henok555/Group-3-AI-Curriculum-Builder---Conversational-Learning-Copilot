@@ -501,3 +501,25 @@ class HealthResponse(BaseModel):
     embedding_model_connected: bool = True
     embedding_model_status: str = "minilm"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CurriculumRegenerateRequest(BaseModel):
+    """POST /curriculum/{training_id}/regenerate request body."""
+    reason: Optional[str] = Field(
+        default=None,
+        description="Human-readable reason for forcing regeneration (logged in metadata)"
+    )
+    options: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional generation overrides (reserved for future use)"
+    )
+
+
+class CurriculumHistoryEntry(BaseModel):
+    """One entry in GET /curriculum/{training_id}/history."""
+    curriculum_db_id: str = Field(description="UUID of the ai_generated_curricula row")
+    generated_at: str = Field(description="ISO timestamp when this version was generated")
+    module_count: Optional[int] = Field(default=None, description="Number of modules in this version")
+    training_title: Optional[str] = None
+    validation_report: Dict[str, Any] = Field(default_factory=dict)
+

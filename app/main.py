@@ -20,6 +20,7 @@ from app.tsp_client import TSPClient, get_tsp_client, close_tsp_client
 from app.schemas import (
     # Request / response API models
     CurriculumRequest, GeneratedCurriculum, CurriculumValidationReport,
+    CurriculumRegenerateRequest, CurriculumHistoryEntry,
     CopilotRequest, CopilotResponse, SourceAttribution, HealthResponse,
     # TSP source models (used for type hints in prompt building)
     LearnerProfile,
@@ -433,6 +434,74 @@ async def get_latest_curriculum(training_id: str, tsp_client: TSPClient = Depend
         )
     cached["metadata"]["from_cache"] = True
     return GeneratedCurriculum(**cached)
+
+
+@app.post("/curriculum/{training_id}/regenerate", response_model=GeneratedCurriculum)
+async def regenerate_curriculum(
+    training_id: str,
+    request: CurriculumRegenerateRequest,
+    tsp_client: TSPClient = Depends(get_tsp_client),
+):
+    """
+    Force-regenerate the curriculum for a training, archiving the previous version.
+
+    Identical to POST /curriculum/generate with force_regenerate=True, but:
+    - Accepts a `reason` field recorded in the curriculum metadata
+    - Makes the intent explicit (auditable regeneration action)
+
+    Always generates fresh — never returns cached.
+    """
+    training_profile = await tsp_client.get_training_profile(training_id)
+    if not training_profile.get("training"):
+        raise HTTPException(404, f"Training {training_id} not found")
+
+    modules = await tsp_client.get_modules_with_lessons(training_id)
+    audience = await tsp_client.get_audience_profile(training_id)
+
+    try:
+        curriculum, validation_report = await _generate_curriculum(
+            training_id=training_id,
+            training_profile=training_profile,
+            modules=modules,
+            audience=audience,
+        )
+    except LLMError as e:
+        raise HTTPException(500, f"LLM generation failed: {e}")
+
+    curriculum_dict = curriculum.model_dump(mode="json")
+    curriculum_dict["validation_report"] = validation_report.model_dump()
+    curriculum_dict.setdefault("metadata", {}).update({
+        "regeneration_reason": request.reason or "Explicit regeneration requested",
+        "from_cache": False,
+    })
+
+    try:
+        db_id = await tsp_client.save_generated_curriculum(training_id, curriculum_dict)
+        curriculum_dict["metadata"]["ai_response_id"] = db_id
+    except Exception as e:
+        print(f"[Warning] Failed to persist regenerated curriculum: {e}")
+
+    return GeneratedCurriculum(**curriculum_dict)
+
+
+@app.get("/curriculum/{training_id}/history", response_model=List[CurriculumHistoryEntry])
+async def get_curriculum_history(
+    training_id: str,
+    tsp_client: TSPClient = Depends(get_tsp_client),
+):
+    """
+    Return all generated curriculum versions for a training, newest first.
+
+    Each entry includes the DB id, timestamp, module count, and validation
+    report summary — but not the full curriculum JSON (use /latest for that).
+    Useful for auditing regenerations and comparing version quality.
+    """
+    training_profile = await tsp_client.get_training_profile(training_id)
+    if not training_profile.get("training"):
+        raise HTTPException(404, f"Training {training_id} not found")
+
+    history = await tsp_client.get_curriculum_history(training_id)
+    return [CurriculumHistoryEntry(**entry) for entry in history]
 
 
 @app.post("/copilot/message", response_model=CopilotResponse)

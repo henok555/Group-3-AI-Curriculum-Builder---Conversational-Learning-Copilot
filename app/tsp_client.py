@@ -433,6 +433,38 @@ class TSPClient:
             """, learner_id, training_id)
             return row is not None
 
+    async def get_curriculum_history(self, training_id: str) -> list[dict]:
+        """
+        Return all generated curriculum versions for a training, newest first.
+
+        Returns lightweight summaries (id, generated_at, module_count) without
+        loading the full curriculum JSON — callers can request a specific version
+        by curriculum_db_id if needed.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    id,
+                    generated_at,
+                    jsonb_array_length(curriculum_json->'modules') AS module_count,
+                    curriculum_json->>'training_title'             AS training_title,
+                    curriculum_json->'validation_report'           AS validation_report
+                FROM ai_generated_curricula
+                WHERE training_id = $1
+                ORDER BY generated_at DESC
+            """, training_id)
+            return [
+                {
+                    "curriculum_db_id": str(r["id"]),
+                    "generated_at": str(r["generated_at"]),
+                    "module_count": r["module_count"],
+                    "training_title": r["training_title"],
+                    "validation_report": dict(r["validation_report"]) if r["validation_report"] else {},
+                }
+                for r in rows
+            ]
+
+
 
 # Singleton instance for FastAPI lifespan
 _tsp_client: Optional[TSPClient] = None
