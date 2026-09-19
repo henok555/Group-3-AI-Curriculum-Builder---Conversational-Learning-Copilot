@@ -2,13 +2,13 @@
 OpenRouter + Gemma LLM client.
 
 Uses OpenRouter's OpenAI-compatible API.
-Model: google/gemma-4-e4b-it (Gemma 4 E4B — 4B efficient instruct model, recommended for TSP AI service)
+Model: google/gemma-4-26b-a4b-it (Gemma 4 — 26B total, 4B active params, instruct)
 
-Why E4B:
-- 4B parameter efficient model optimised for instruction following
-- Faster inference and lower cost than 27B/31B variants
+Why Gemma 4 (A4B):
+- 26B total / 4B active parameter MoE model optimised for instruction following
+- Faster inference and lower cost than dense 31B variant
 - Context window: 128K tokens — sufficient for full curriculum prompts
-- Available on OpenRouter free tier as: google/gemma-4-e4b-it:free
+- Available on OpenRouter free tier as: google/gemma-4-26b-a4b-it:free
 """
 
 import os
@@ -21,9 +21,9 @@ from typing import Optional
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# Gemma 4 E4B Instruct — recommended model for this service
+# Gemma 4 (26B-A4B) Instruct — recommended model for this service
 # Override via GEMMA_MODEL env var if needed (e.g. for testing paid tier)
-GEMMA_MODEL = os.getenv("GEMMA_MODEL", "google/gemma-4-e4b-it:free")
+GEMMA_MODEL = os.getenv("GEMMA_MODEL", "google/gemma-4-26b-a4b-it:free")
 
 # Timeout: E4B is fast, but curriculum generation prompts are large
 DEFAULT_TIMEOUT_SECONDS = 120.0
