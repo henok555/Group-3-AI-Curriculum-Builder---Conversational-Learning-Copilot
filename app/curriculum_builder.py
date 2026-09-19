@@ -159,10 +159,13 @@ def _flatten_objectives(objectives: list) -> list[dict]:
     return flat
 
 
-def _format_module_block(module: dict) -> str:
+def _format_module_block(module: dict, fallback_order: int = 0) -> str:
     """Format one TSP module + its lessons and content into a prompt block."""
+    # module_order is NULL for some records — fallback to row position
+    order = module.get("module_order") or fallback_order
+
     lines = [
-        f"MODULE {module.get('module_order', '?')}: {module.get('name', 'Unnamed')}",
+        f"MODULE {order}: {module.get('name', 'Unnamed')}",
         f"  Description: {module.get('description', 'N/A')}",
         f"  Key concepts: {module.get('key_concepts', 'N/A')}",
         f"  Duration: {module.get('duration', '?')} {module.get('duration_type', 'HOURS')}",
@@ -170,7 +173,11 @@ def _format_module_block(module: dict) -> str:
         f"  Instructional methods: {', '.join(im['name'] for im in module.get('instructional_methods', [])) or 'N/A'}",
         f"  Assessment types: {', '.join(module.get('assessment_types', [])) or 'N/A'}",
         f"  Primary materials: {module.get('primary_materials', 'N/A')}",
+        f"  Secondary materials: {module.get('secondary_materials', 'N/A')}",
         f"  Digital tools: {module.get('digital_tools', 'N/A')}",
+        f"  Differentiation strategies: {module.get('differentiation_strategies', 'N/A')}",
+        f"  Inclusion strategy: {module.get('inclusion_strategy', 'N/A')}",
+        f"  Technology integration: {module.get('technology_integration_description', 'N/A')}",
     ]
 
     for lesson in module.get("lessons", []):
@@ -232,8 +239,8 @@ def build_curriculum_prompt(
     else:
         objectives_block = "  (none defined — infer from training scope)"
 
-    # Module blocks
-    module_blocks = [_format_module_block(m) for m in modules]
+    # Module blocks — pass row index as fallback for NULL module_order values
+    module_blocks = [_format_module_block(m, i + 1) for i, m in enumerate(modules)]
     modules_block = "\n\n".join(module_blocks) if module_blocks else "No modules defined yet."
 
     # Audience block
@@ -280,6 +287,9 @@ TRAINING OBJECTIVES  (use these IDs in objectives_mapping and module.objective_i
 
 ═══════════════════════════════════════════════
 TSP MODULES AND ACCEPTED CONTENT
+(Use each module's actual description, key concepts, teaching strategy, differentiation
+strategies, inclusion strategy, materials, and lesson objectives as the foundation.
+Do NOT replace or ignore any field that already has content — enrich, don't invent.)
 ═══════════════════════════════════════════════
 {modules_block}
 
