@@ -2,12 +2,12 @@
 FastAPI application for TSP AI Service.
 
 Endpoints:
-- GET /health
+- GET  /health
 - POST /curriculum/generate
+- GET  /curriculum/{training_id}/latest
 - POST /copilot/message
 """
 
-import os
 import json
 import re
 from contextlib import asynccontextmanager
@@ -15,18 +15,20 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
 from app.tsp_client import TSPClient, get_tsp_client, close_tsp_client
 from app.schemas import (
-    CurriculumRequest, Curriculum, 
-    CopilotRequest, CopilotResponse, 
-    SourceAttribution, HealthResponse,
-    LearnerProfile, Module, Lesson, Assignment, Assessment, Rubric, RubricCriterion
+    # Request / response API models
+    CurriculumRequest, GeneratedCurriculum, CurriculumValidationReport,
+    CopilotRequest, CopilotResponse, SourceAttribution, HealthResponse,
+    # TSP source models (used for type hints in prompt building)
+    LearnerProfile,
+    # AI-generated models
+    GeneratedModule, GeneratedLesson, GeneratedAssignment, GeneratedAssessment,
+    Rubric, RubricCriterion,
 )
 from app.llm import call_gemma_json, call_gemma, LLMError, test_gemma_connection
-from app.retrieval import retrieve_relevant_chunks, embed_text, get_embedder_info, get_embedder_name
+from app.retrieval import retrieve_relevant_chunks, get_embedder_info, get_embedder_name
 
 
 # ==================== Guardrails ====================
@@ -84,88 +86,205 @@ async def check_llm_injection(text: str) -> tuple[bool, Optional[str]]:
 
 # ==================== Curriculum Generation Prompt ====================
 
-CURRICULUM_SYSTEM_PROMPT = """You are an expert curriculum designer for the TSP (Training Solution Platform).
-Generate a structured curriculum based on the training profile, audience profile, and available content.
+# ── Bloom's Taxonomy verbs by level (used in system prompt and prompt builder) ──
+BLOOM_LEVEL_VERBS = {
+    "Remember":   "list, recall, name, identify, define, match",
+    "Understand": "summarize, explain, interpret, classify, describe, paraphrase",
+    "Apply":      "use, execute, implement, demonstrate, solve, carry out",
+    "Analyze":    "differentiate, organize, distinguish, compare, attribute, examine",
+    "Evaluate":   "judge, justify, critique, assess, defend, recommend",
+    "Create":     "design, construct, produce, plan, assemble, develop",
+}
 
-Requirements:
-- Minimum 3 modules, 2+ lessons per module
-- Each module: 1+ assignment, 1+ assessment, 1+ rubric
-- Map to training objectives and outcomes
-- Use ONLY the provided TSP data - do not invent content
-- Output valid JSON matching the Curriculum schema exactly
+# ── Map TSP learner levels to Bloom's cognitive level ──
+LEARNER_LEVEL_BLOOM = {
+    "Beginner":      "Understand",
+    "Intermediate":  "Apply",
+    "Advanced":      "Analyze",
+    "Expert":        "Evaluate",
+}
 
-Context:
-- Training: {training_title}
-- Audience: {audience_summary}
-- Objectives: {objectives_summary}
-- Modules with lessons: {modules_summary}
-- Accepted content: {content_summary}"""
+CURRICULUM_SYSTEM_PROMPT = """You are an expert curriculum designer applying Bloom's Taxonomy and constructive alignment.
+Generate a pedagogically sound, structured curriculum for the TSP (Training Solution Platform).
+
+## Pedagogical Principles
+- Use constructive alignment: objectives → teaching activities → assessments all align
+- Write lesson objectives using action verbs from the target Bloom's level
+- Each module should build on the previous (scaffold learning)
+- Differentiate: vary instructional methods across modules (lecture, discussion, practical, case study)
+
+## Structural Requirements
+- Minimum 3 modules, each with 2–4 lessons
+- Each module MUST have: at least 1 assignment, 1 assessment, and 1 rubric
+- Each rubric MUST have EXACTLY 3 criteria, each with weight 0.33 (sum = 0.99 ≈ 1.0)
+- Each rubric criterion MUST include 4 performance levels keyed "4", "3", "2", "1"
+- All IDs must be unique strings (use format: "mod-1", "les-1-1", "asgn-1", "asmt-1", "rub-1", "crit-1-1")
+- Use ONLY information from the provided training profile — do not invent facts
+
+## Few-Shot Example (Module → Rubric)
+This shows the exact structure expected for a rubric:
+
+```json
+{
+  "id": "rub-1",
+  "title": "Module 1 Assignment Rubric",
+  "description": "Evaluates quality of practical demonstration",
+  "criteria": [
+    {
+      "criterion": "Content Accuracy",
+      "description": "Correctness of information presented",
+      "weight": 0.33,
+      "levels": {
+        "4": "All content is accurate, fully supported by training materials",
+        "3": "Most content is accurate with minor errors",
+        "2": "Some inaccuracies that affect understanding",
+        "1": "Significant inaccuracies throughout"
+      }
+    },
+    {
+      "criterion": "Practical Application",
+      "description": "Ability to apply concepts to real-world scenarios",
+      "weight": 0.33,
+      "levels": {
+        "4": "Demonstrates clear, creative real-world application",
+        "3": "Applies concepts correctly in most cases",
+        "2": "Limited application with prompting needed",
+        "1": "Unable to apply concepts without significant support"
+      }
+    },
+    {
+      "criterion": "Communication",
+      "description": "Clarity and professionalism of presentation",
+      "weight": 0.34,
+      "levels": {
+        "4": "Exceptionally clear, professional, and well-structured",
+        "3": "Clear and organized with minor issues",
+        "2": "Somewhat unclear or disorganized",
+        "1": "Difficult to understand; lacks structure"
+      }
+    }
+  ],
+  "total_weight": 1.0
+}
+```
+
+OUTPUT: Respond ONLY with valid JSON matching the Curriculum schema. No markdown, no extra text."""
+
+
+def _collect_all_objectives(objectives: list) -> list:
+    """Flatten the objectives tree into a list of (id, definition) dicts."""
+    flat = []
+    for obj in objectives:
+        flat.append({"id": obj["id"], "definition": obj["definition"]})
+        for child in obj.get("children", []):
+            flat.append({"id": child["id"], "definition": child["definition"]})
+            for outcome in child.get("outcomes", []):
+                flat.append({"id": outcome["id"], "definition": f"Outcome: {outcome['definition']}"})
+    return flat
 
 
 def build_curriculum_prompt(training_profile: dict, modules: list, audience: dict) -> str:
-    """Build the curriculum generation prompt."""
-    # Summarize objectives
-    objectives = training_profile.get("objectives", [])
-    obj_lines = []
-    for obj in objectives:
-        obj_lines.append(f"- {obj['definition']}")
-        for child in obj.get("children", []):
-            obj_lines.append(f"  - {child['definition']}")
-            for outcome in child.get("outcomes", []):
-                obj_lines.append(f"    * Outcome: {outcome['definition']}")
-    
-    # Summarize modules
-    mod_lines = []
+    """Build a rich, pedagogically-informed curriculum generation prompt."""
+    training = training_profile.get("training", {})
+    learner_level = audience.get("learner_level", "Intermediate")
+    bloom_target = LEARNER_LEVEL_BLOOM.get(learner_level, "Apply")
+    bloom_verbs = BLOOM_LEVEL_VERBS[bloom_target]
+
+    # --- Objectives with IDs ---
+    all_objectives = _collect_all_objectives(training_profile.get("objectives", []))
+    if all_objectives:
+        obj_lines = [
+            f"  [{o['id']}] {o['definition']}" for o in all_objectives
+        ]
+        objectives_block = "\n".join(obj_lines)
+    else:
+        objectives_block = "  (none defined — infer from training scope)"
+
+    # --- Modules with lessons and content ---
+    mod_blocks = []
     for m in modules:
-        mod_lines.append(f"Module {m['module_order']}: {m['name']}")
-        mod_lines.append(f"  Key concepts: {m.get('key_concepts', 'N/A')}")
-        mod_lines.append(f"  Duration: {m.get('duration', 0)} {m.get('duration_type', 'HOURS')}")
-        mod_lines.append(f"  Instructional methods: {', '.join([im['name'] for im in m.get('instructional_methods', [])])}")
-        mod_lines.append(f"  Assessment types: {', '.join(m.get('assessment_types', []))}")
-        mod_lines.append(f"  Primary materials: {m.get('primary_materials', 'N/A')}")
+        lines = [
+            f"MODULE {m['module_order']}: {m['name']}",
+            f"  Key concepts: {m.get('key_concepts', 'N/A')}",
+            f"  Duration: {m.get('duration', 0)} {m.get('duration_type', 'HOURS')}",
+            f"  Instructional methods: {', '.join(im['name'] for im in m.get('instructional_methods', [])) or 'N/A'}",
+            f"  Assessment types: {', '.join(m.get('assessment_types', [])) or 'N/A'}",
+            f"  Primary materials: {m.get('primary_materials', 'N/A')}",
+        ]
         for lesson in m.get("lessons", []):
-            mod_lines.append(f"  Lesson: {lesson['name']} ({lesson.get('duration', 0)} {lesson.get('duration_type', 'HOURS')})")
-            mod_lines.append(f"    Objective: {lesson.get('objective', 'N/A')}")
-            mod_lines.append(f"    Methods: {', '.join([im['name'] for im in lesson.get('instructional_methods', [])])}")
+            lines.append(f"  LESSON: {lesson['name']}")
+            lines.append(f"    Duration: {lesson.get('duration', 0)} {lesson.get('duration_type', 'HOURS')}")
+            lines.append(f"    Objective: {lesson.get('objective', 'N/A')}")
+            methods = [im['name'] for im in lesson.get('instructional_methods', [])]
+            lines.append(f"    Methods: {', '.join(methods) or 'N/A'}")
         for content in m.get("accepted_contents", []):
-            mod_lines.append(f"  Content: {content['name']} ({content['file_type']}, {content['level']})")
-    
-    # Audience summary
-    aud = audience
-    aud_summary = f"""
-Education: {aud.get('education_level', 'N/A')} ({aud.get('education_level_desc', '')})
-Language: {aud.get('language_name', 'N/A')} ({aud.get('language_code', '')})
-Learner Level: {aud.get('learner_level', 'N/A')} ({aud.get('learner_level_desc', '')})
-Work Experience: {aud.get('work_experience', 'N/A')} ({aud.get('work_experience_desc', '')})
-Specific Courses: {', '.join(aud.get('specific_courses', [])) or 'None'}
-Prerequisites: {', '.join(aud.get('specific_prerequisites', [])) or 'None'}
-"""
-    
-    return f"""Generate a complete curriculum for this training.
+            lines.append(
+                f"  CONTENT [{content['id']}]: {content['name']} "
+                f"({content['file_type']}, level={content['level']}, "
+                f"{content.get('time_to_read_minutes', '?')} min read)"
+            )
+            if content.get("description"):
+                lines.append(f"    → {content['description'][:200]}")
+        mod_blocks.append("\n".join(lines))
 
-TRAINING: {training_profile.get('training', {}).get('title', 'Unknown')}
-RATIONALE: {training_profile.get('training', {}).get('rationale', 'N/A')}
-SCOPE: {training_profile.get('training', {}).get('scope', 'N/A')}
+    # --- Audience summary ---
+    aud_lines = [
+        f"  Education: {audience.get('education_level', 'N/A')} — {audience.get('education_level_desc', '')}",
+        f"  Language: {audience.get('language_name', 'N/A')} ({audience.get('language_code', '')})",
+        f"  Learner Level: {learner_level} → target Bloom's level: {bloom_target}",
+        f"  Work Experience: {audience.get('work_experience', 'N/A')}",
+        f"  Prerequisites: {', '.join(audience.get('specific_prerequisites', [])) or 'None'}",
+        f"  Prior courses: {', '.join(audience.get('specific_courses', [])) or 'None'}",
+    ]
 
-AUDIENCE PROFILE:
-{aud_summary}
+    objective_ids_str = ", ".join(f'"{o["id"]}"' for o in all_objectives[:6])  # first 6 for mapping
 
-OBJECTIVES & OUTCOMES:
-{chr(10).join(obj_lines) if obj_lines else 'None defined'}
+    return f"""Generate a complete curriculum for the following training.
 
-EXISTING MODULES & LESSONS:
-{chr(10).join(mod_lines) if mod_lines else 'No existing modules'}
+═══════════════════════════════════════
+TRAINING OVERVIEW
+═══════════════════════════════════════
+Title:     {training.get('title', 'Unknown')}
+Rationale: {training.get('rationale', 'N/A')}
+Scope:     {training.get('scope', 'N/A')}
+Keywords:  {', '.join(training_profile.get('keywords', []))}
+Purposes:  {', '.join(training_profile.get('purposes', []))}
 
-INSTRUCTIONS:
-1. Create 3-5 modules (use existing module structure as base, enhance with generated content)
-2. Each module: 2-4 lessons with clear objectives
-3. Each module: 1 assignment (individual/group/practical) with rubric
-4. Each module: 1 assessment (quiz/project/portfolio) with questions
-5. Map each module/lesson to training objectives
-6. Reference accepted content where relevant
-7. Adapt difficulty to audience profile (Intermediate level, Professional Certification education)
+═══════════════════════════════════════
+AUDIENCE PROFILE
+═══════════════════════════════════════
+{chr(10).join(aud_lines)}
 
-OUTPUT: Valid JSON matching the Curriculum schema exactly.""" 
+Bloom's guidance: Write ALL lesson objectives using action verbs from the "{bloom_target}" level.
+Example verbs: {bloom_verbs}
+
+═══════════════════════════════════════
+TRAINING OBJECTIVES (use these IDs in objectives_mapping)
+═══════════════════════════════════════
+{objectives_block}
+
+═══════════════════════════════════════
+EXISTING TSP MODULES & ACCEPTED CONTENT
+═══════════════════════════════════════
+{chr(10).join(chr(10).join([block, '']) for block in mod_blocks) if mod_blocks else 'No modules defined yet.'}
+
+═══════════════════════════════════════
+GENERATION INSTRUCTIONS
+═══════════════════════════════════════
+1. Create 3–5 modules using the existing module structure as the foundation
+2. Each module: 2–4 lessons, each with a Bloom's-aligned objective and bloom_level field
+3. Each module: exactly 1 assignment (choose type: individual/group/practical/written/presentation)
+4. Each module: exactly 1 assessment (choose type: quiz/exam/project/portfolio/presentation/practical)
+5. Each module: exactly 1 rubric with EXACTLY 3 criteria, weights [0.33, 0.33, 0.34] (sum = 1.0)
+6. Fill `objective_ids` for each module with the relevant objective IDs from the list above
+7. Fill `objectives_mapping` at the top level: {{objective_id: [module_id, ...]}}
+8. Reference accepted content IDs in `content_references` within relevant lessons
+9. Adapt language complexity to {learner_level} learners
+10. Use only facts and concepts from the provided training data
+
+Objective IDs available for mapping: [{objective_ids_str}]
+
+Output the complete JSON now."""
 
 
 # ==================== Copilot Prompt ====================
@@ -226,6 +345,164 @@ QUESTION: {question}
 
 ANSWER (cite sources like [Module: Lesson]):"""
 
+# ==================== Curriculum Validation & Auto-Fix ====================
+
+DEFAULT_RUBRIC_WEIGHTS = [0.33, 0.33, 0.34]  # Sum = 1.0
+
+
+def _normalize_rubric_weights(criteria: list) -> tuple[list, bool]:
+    """
+    Normalize rubric criteria weights so they sum to 1.0.
+    Returns (normalized_criteria, was_changed).
+    """
+    if not criteria:
+        return criteria, False
+    total = sum(c.get("weight", 0) for c in criteria)
+    if abs(total - 1.0) <= 0.01:
+        return criteria, False  # already fine
+    # Distribute equally if all zero, otherwise proportionally scale
+    if total == 0:
+        equal = round(1.0 / len(criteria), 4)
+        for c in criteria:
+            c["weight"] = equal
+    else:
+        for c in criteria:
+            c["weight"] = round(c.get("weight", 0) / total, 4)
+    # Fix floating point — assign remainder to last
+    diff = round(1.0 - sum(c["weight"] for c in criteria), 4)
+    if diff != 0:
+        criteria[-1]["weight"] = round(criteria[-1]["weight"] + diff, 4)
+    return criteria, True
+
+
+def _make_default_criterion(index: int, module_name: str) -> dict:
+    """Synthesize a minimal rubric criterion with 4 performance levels."""
+    names = ["Content Accuracy", "Practical Application", "Communication"]
+    name = names[index % len(names)]
+    return {
+        "criterion": name,
+        "description": f"{name} as demonstrated in {module_name}",
+        "weight": DEFAULT_RUBRIC_WEIGHTS[index % len(DEFAULT_RUBRIC_WEIGHTS)],
+        "levels": {
+            "4": "Excellent — exceeds expectations",
+            "3": "Good — meets expectations",
+            "2": "Developing — partially meets expectations",
+            "1": "Beginning — does not yet meet expectations",
+        },
+    }
+
+
+def _make_default_assignment(module_id: str, module_name: str) -> dict:
+    """Synthesize a minimal assignment for a module that has none."""
+    return {
+        "id": f"asgn-default-{module_id}",
+        "title": f"{module_name} Practical Assignment",
+        "description": f"Demonstrate understanding of {module_name} concepts through a practical exercise.",
+        "type": "practical",
+        "estimated_hours": 2.0,
+        "rubric_id": f"rub-default-{module_id}",
+    }
+
+
+def _make_default_assessment(module_id: str, module_name: str) -> dict:
+    """Synthesize a minimal assessment for a module that has none."""
+    return {
+        "id": f"asmt-default-{module_id}",
+        "title": f"{module_name} Knowledge Check",
+        "description": f"Assess comprehension of {module_name} key concepts.",
+        "type": "quiz",
+        "questions": [
+            {
+                "question": f"What are the key concepts of {module_name}?",
+                "type": "short_answer",
+                "points": 10,
+            }
+        ],
+        "duration_minutes": 30,
+        "max_attempts": 2,
+        "passing_score": 70.0,
+    }
+
+
+def _make_default_rubric(module_id: str, module_name: str) -> dict:
+    """Synthesize a minimal 3-criteria rubric."""
+    return {
+        "id": f"rub-default-{module_id}",
+        "title": f"{module_name} Rubric",
+        "description": f"Evaluation rubric for {module_name} assignments",
+        "criteria": [_make_default_criterion(i, module_name) for i in range(3)],
+        "total_weight": 1.0,
+    }
+
+
+def validate_and_fix_curriculum(curriculum_data: dict) -> tuple[dict, CurriculumValidationReport]:
+    """
+    Post-generation validation and auto-correction.
+
+    Fixes:
+    1. Rubric weight normalization (sum must ≈ 1.0)
+    2. Rubric minimum 3 criteria enforcement
+    3. Missing assignment/assessment/rubric per module
+    4. Empty lesson objectives
+    5. objectives_mapping inference if empty
+
+    Returns (fixed_curriculum_data, report).
+    """
+    report = CurriculumValidationReport()
+
+    for mod in curriculum_data.get("modules", []):
+        mod_id = mod.get("id", "unknown")
+        mod_name = mod.get("name", "Module")
+
+        # Fix rubrics
+        for rubric in mod.get("rubrics", []):
+            criteria = rubric.get("criteria", [])
+
+            # Ensure minimum 3 criteria
+            while len(criteria) < 3:
+                criteria.append(_make_default_criterion(len(criteria), mod_name))
+                report.rubrics_criteria_padded += 1
+            rubric["criteria"] = criteria
+
+            # Normalize weights
+            rubric["criteria"], changed = _normalize_rubric_weights(rubric["criteria"])
+            if changed:
+                report.rubrics_weight_normalized += 1
+            rubric["total_weight"] = 1.0
+
+        # Ensure module has at least 1 assignment
+        if not mod.get("assignments"):
+            mod["assignments"] = [_make_default_assignment(mod_id, mod_name)]
+            report.modules_assignment_added += 1
+
+        # Ensure module has at least 1 assessment
+        if not mod.get("assessments"):
+            mod["assessments"] = [_make_default_assessment(mod_id, mod_name)]
+            report.modules_assessment_added += 1
+
+        # Ensure module has at least 1 rubric
+        if not mod.get("rubrics"):
+            mod["rubrics"] = [_make_default_rubric(mod_id, mod_name)]
+            report.modules_rubric_added += 1
+
+        # Fix lesson objectives
+        for lesson in mod.get("lessons", []):
+            if not lesson.get("objective"):
+                lesson["objective"] = f"Demonstrate understanding of {lesson.get('name', 'lesson content')}."
+                report.lessons_objective_filled += 1
+
+    # Infer objectives_mapping if empty
+    if not curriculum_data.get("objectives_mapping"):
+        mapping: dict = {}
+        for mod in curriculum_data.get("modules", []):
+            for obj_id in mod.get("objective_ids", []):
+                mapping.setdefault(obj_id, []).append(mod["id"])
+        if mapping:
+            curriculum_data["objectives_mapping"] = mapping
+            report.objectives_mapping_inferred = True
+
+    return curriculum_data, report
+
 
 # ==================== FastAPI App ====================
 
@@ -280,39 +557,74 @@ async def health_check():
     )
 
 
-@app.post("/curriculum/generate", response_model=Curriculum)
+@app.post("/curriculum/generate", response_model=GeneratedCurriculum)
 async def generate_curriculum(request: CurriculumRequest, tsp_client: TSPClient = Depends(get_tsp_client)):
-    """Generate a curriculum for a training."""
+    """Generate (or retrieve cached) curriculum for a training."""
     # Fetch training data
     training_profile = await tsp_client.get_training_profile(request.training_id)
     if not training_profile.get("training"):
         raise HTTPException(404, f"Training {request.training_id} not found")
-    
+
+    # Return cached curriculum if not forcing regeneration
+    if not request.force_regenerate:
+        cached = await tsp_client.get_latest_curriculum(request.training_id)
+        if cached:
+            cached["metadata"]["from_cache"] = True
+            return GeneratedCurriculum(**cached)
+
     modules = await tsp_client.get_modules_with_lessons(request.training_id)
     audience = await tsp_client.get_audience_profile(request.training_id)
-    
+
     # Build prompt
     prompt = build_curriculum_prompt(training_profile, modules, audience)
-    
+
     # Call LLM with JSON output
     try:
         curriculum_data = await call_gemma_json(
             prompt=prompt,
             system_prompt=CURRICULUM_SYSTEM_PROMPT,
-            schema=Curriculum.model_json_schema(),
+            schema=GeneratedCurriculum.model_json_schema(),
             max_retries=3
         )
     except LLMError as e:
         raise HTTPException(500, f"LLM generation failed: {e}")
-    
+
+    # Inject required top-level fields the LLM may have omitted
+    curriculum_data.setdefault("training_id", request.training_id)
+    curriculum_data.setdefault("training_title", training_profile.get("training", {}).get("title", ""))
+
+    # Post-generation validation and auto-correction
+    curriculum_data, validation_report = validate_and_fix_curriculum(curriculum_data)
+    curriculum_data["validation_report"] = validation_report.model_dump()
+
     # Save to database (idempotent)
     try:
         response_id = await tsp_client.save_generated_curriculum(request.training_id, curriculum_data)
+        curriculum_data.setdefault("metadata", {})
         curriculum_data["metadata"]["ai_response_id"] = response_id
+        curriculum_data["metadata"]["from_cache"] = False
     except Exception as e:
         print(f"Warning: Failed to save curriculum: {e}")
-    
-    return Curriculum(**curriculum_data)
+
+    return GeneratedCurriculum(**curriculum_data)
+
+
+@app.get("/curriculum/{training_id}/latest", response_model=GeneratedCurriculum)
+async def get_latest_curriculum(training_id: str, tsp_client: TSPClient = Depends(get_tsp_client)):
+    """Retrieve the most recently generated curriculum for a training without triggering re-generation."""
+    training_profile = await tsp_client.get_training_profile(training_id)
+    if not training_profile.get("training"):
+        raise HTTPException(404, f"Training {training_id} not found")
+
+    cached = await tsp_client.get_latest_curriculum(training_id)
+    if not cached:
+        raise HTTPException(
+            404,
+            f"No generated curriculum found for training {training_id}. "
+            "Call POST /curriculum/generate first."
+        )
+    cached["metadata"]["from_cache"] = True
+    return GeneratedCurriculum(**cached)
 
 
 @app.post("/copilot/message", response_model=CopilotResponse)
