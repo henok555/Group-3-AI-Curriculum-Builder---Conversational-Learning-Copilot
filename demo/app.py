@@ -148,32 +148,58 @@ with tab_curr:
     tid_in = st.text_input("Training ID", value=st.session_state.get("curr_tid", DEMO_TRAINING), key="curr_tid_in")
 
     if st.button("🚀  Generate Curriculum", type="primary", use_container_width=True, key="gen"):
-        with st.spinner("Fetching TSP data → building prompt → calling Gemma → validating..."):
+        force_regen = st.session_state.get("force_regen", False)
+        with st.spinner("Fetching TSP data → building prompt → calling Gemma E4B → validating..."):
             try:
                 r = httpx.post(f"{api_url}/curriculum/generate",
-                               json={"training_id": tid_in}, timeout=180.0)
+                               json={"training_id": tid_in, "force_regenerate": force_regen}, timeout=180.0)
 
                 if r.status_code == 200:
                     d = r.json()
-                    st.success(f"✅  **{d.get('training_title','?')}** — curriculum generated")
+                    from_cache = d.get("metadata", {}).get("from_cache", False)
+                    st.success(f"{'📦 Cached:' if from_cache else '✅ Generated:'} **{d.get('training_title','?')}**")
 
                     mods = d.get("modules", [])
-                    total_lessons = sum(len(m.get("lessons",[])) for m in mods)
-                    total_assess  = sum(len(m.get("assessments",[])) for m in mods)
+                    total_lessons   = sum(len(m.get("lessons",[])) for m in mods)
+                    total_assess    = sum(len(m.get("assessments",[])) for m in mods)
+                    total_rubrics   = sum(len(m.get("rubrics",[])) for m in mods)
                     c1, c2, c3, c4 = st.columns(4)
                     c1.markdown(f'<div class="stat-num">{len(mods)}</div><div class="stat-label">Modules</div>', unsafe_allow_html=True)
                     c2.markdown(f'<div class="stat-num">{total_lessons}</div><div class="stat-label">Lessons</div>', unsafe_allow_html=True)
                     c3.markdown(f'<div class="stat-num">{total_assess}</div><div class="stat-label">Assessments</div>', unsafe_allow_html=True)
-                    c4.markdown(f'<div class="stat-num">{len(d.get("modules",[]))}</div><div class="stat-label">Rubrics</div>', unsafe_allow_html=True)
+                    c4.markdown(f'<div class="stat-num">{total_rubrics}</div><div class="stat-label">Rubrics</div>', unsafe_allow_html=True)
 
+                    # Validation report
+                    vr = d.get("validation_report")
+                    if vr:
+                        fixed = [k for k, v in vr.items() if v and v != False]
+                        if fixed:
+                            st.info(f"🔧 Auto-corrected: {', '.join(fixed)}")
+
+                    # Modules
                     for m in mods:
                         with st.expander(f"Module {m.get('module_order','?')}: {m.get('name','?')}", expanded=False):
                             st.markdown(f"**Key Concepts:** {m.get('key_concepts','N/A')}")
-                            st.markdown(f"**Duration:** {m.get('duration_hours','?')} hrs")
+                            # duration (real DB column name, not duration_hours)
+                            st.markdown(f"**Duration:** {m.get('duration','?')} {m.get('duration_type','HOURS')}")
+                            st.markdown(f"**Teaching strategy:** {m.get('teaching_strategy','N/A')}")
                             for l in m.get("lessons", []):
-                                st.markdown(f"  📖 **{l.get('name','?')}** — {l.get('objective','')}")
+                                bloom = f" · *{l.get('bloom_level','')}*" if l.get('bloom_level') else ""
+                                st.markdown(f"  📖 **{l.get('name','?')}**{bloom}")
+                                if l.get('objective'):
+                                    st.caption(f"  ↳ {l['objective']}")
                             if m.get("assessments"):
-                                st.markdown(f"**Assessment:** {m['assessments'][0].get('title','?')}")
+                                st.markdown(f"**Assessment:** {m['assessments'][0].get('title','?')} ({m['assessments'][0].get('type','?')}, {m['assessments'][0].get('duration_minutes','?')} min)")
+                            # Rubric viewer
+                            for rub in m.get("rubrics", []):
+                                with st.expander(f"📋 Rubric: {rub.get('title','?')}", expanded=False):
+                                    for crit in rub.get("criteria", []):
+                                        w_pct = round(crit.get("weight", 0) * 100)
+                                        st.markdown(f"**{crit['criterion']}** ({w_pct}%) — {crit.get('description','')}")
+                                        lvls = crit.get("levels", {})
+                                        for score in ["4", "3", "2", "1"]:
+                                            if score in lvls:
+                                                st.caption(f"  Score {score}: {lvls[score]}")
 
                     with st.expander("📋 Full JSON", expanded=False):
                         st.json(d)
