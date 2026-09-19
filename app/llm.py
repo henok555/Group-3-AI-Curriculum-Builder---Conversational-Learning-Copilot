@@ -90,21 +90,30 @@ async def call_gemma(
     }
 
     async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
-        try:
-            resp = await client.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
-        except httpx.HTTPStatusError as e:
-            raise LLMError(
-                f"OpenRouter API error {e.response.status_code}: {e.response.text}"
-            ) from e
-        except Exception as e:
-            raise LLMError(f"LLM call failed: {e}") from e
+        max_attempts = 4
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = await client.post(
+                    f"{OPENROUTER_BASE_URL}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return data["choices"][0]["message"]["content"].strip()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < max_attempts:
+                    # Rate limited — exponential backoff (10s, 20s, 40s)
+                    wait = 10 * (2 ** (attempt - 1))
+                    print(f"[LLM] Rate limited (429), retrying in {wait}s (attempt {attempt}/{max_attempts})")
+                    import asyncio
+                    await asyncio.sleep(wait)
+                    continue
+                raise LLMError(
+                    f"OpenRouter API error {e.response.status_code}: {e.response.text}"
+                ) from e
+            except Exception as e:
+                raise LLMError(f"LLM call failed: {e}") from e
 
 
 def _extract_json_from_response(text: str) -> str:
