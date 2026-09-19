@@ -27,8 +27,14 @@ from app.schemas import (
     GeneratedModule, GeneratedLesson, GeneratedAssignment, GeneratedAssessment,
     Rubric, RubricCriterion,
 )
-from app.llm import call_gemma_json, call_gemma, LLMError, test_gemma_connection
+from app.llm import call_gemma, LLMError, test_gemma_connection
 from app.retrieval import retrieve_relevant_chunks, get_embedder_info, get_embedder_name
+from app.curriculum_builder import (
+    generate_curriculum as _generate_curriculum,
+    validate_and_fix_curriculum,
+    build_curriculum_prompt,
+    CURRICULUM_SYSTEM_PROMPT,
+)
 
 
 # ==================== Guardrails ====================
@@ -82,209 +88,6 @@ async def check_llm_injection(text: str) -> tuple[bool, Optional[str]]:
         print(f"Warning: LLM injection check bypassed due to error: {e}")
 
     return False, None
-
-
-# ==================== Curriculum Generation Prompt ====================
-
-# ── Bloom's Taxonomy verbs by level (used in system prompt and prompt builder) ──
-BLOOM_LEVEL_VERBS = {
-    "Remember":   "list, recall, name, identify, define, match",
-    "Understand": "summarize, explain, interpret, classify, describe, paraphrase",
-    "Apply":      "use, execute, implement, demonstrate, solve, carry out",
-    "Analyze":    "differentiate, organize, distinguish, compare, attribute, examine",
-    "Evaluate":   "judge, justify, critique, assess, defend, recommend",
-    "Create":     "design, construct, produce, plan, assemble, develop",
-}
-
-# ── Map TSP learner levels to Bloom's cognitive level ──
-LEARNER_LEVEL_BLOOM = {
-    "Beginner":      "Understand",
-    "Intermediate":  "Apply",
-    "Advanced":      "Analyze",
-    "Expert":        "Evaluate",
-}
-
-CURRICULUM_SYSTEM_PROMPT = """You are an expert curriculum designer applying Bloom's Taxonomy and constructive alignment.
-Generate a pedagogically sound, structured curriculum for the TSP (Training Solution Platform).
-
-## Pedagogical Principles
-- Use constructive alignment: objectives → teaching activities → assessments all align
-- Write lesson objectives using action verbs from the target Bloom's level
-- Each module should build on the previous (scaffold learning)
-- Differentiate: vary instructional methods across modules (lecture, discussion, practical, case study)
-
-## Structural Requirements
-- Minimum 3 modules, each with 2–4 lessons
-- Each module MUST have: at least 1 assignment, 1 assessment, and 1 rubric
-- Each rubric MUST have EXACTLY 3 criteria, each with weight 0.33 (sum = 0.99 ≈ 1.0)
-- Each rubric criterion MUST include 4 performance levels keyed "4", "3", "2", "1"
-- All IDs must be unique strings (use format: "mod-1", "les-1-1", "asgn-1", "asmt-1", "rub-1", "crit-1-1")
-- Use ONLY information from the provided training profile — do not invent facts
-
-## Few-Shot Example (Module → Rubric)
-This shows the exact structure expected for a rubric:
-
-```json
-{
-  "id": "rub-1",
-  "title": "Module 1 Assignment Rubric",
-  "description": "Evaluates quality of practical demonstration",
-  "criteria": [
-    {
-      "criterion": "Content Accuracy",
-      "description": "Correctness of information presented",
-      "weight": 0.33,
-      "levels": {
-        "4": "All content is accurate, fully supported by training materials",
-        "3": "Most content is accurate with minor errors",
-        "2": "Some inaccuracies that affect understanding",
-        "1": "Significant inaccuracies throughout"
-      }
-    },
-    {
-      "criterion": "Practical Application",
-      "description": "Ability to apply concepts to real-world scenarios",
-      "weight": 0.33,
-      "levels": {
-        "4": "Demonstrates clear, creative real-world application",
-        "3": "Applies concepts correctly in most cases",
-        "2": "Limited application with prompting needed",
-        "1": "Unable to apply concepts without significant support"
-      }
-    },
-    {
-      "criterion": "Communication",
-      "description": "Clarity and professionalism of presentation",
-      "weight": 0.34,
-      "levels": {
-        "4": "Exceptionally clear, professional, and well-structured",
-        "3": "Clear and organized with minor issues",
-        "2": "Somewhat unclear or disorganized",
-        "1": "Difficult to understand; lacks structure"
-      }
-    }
-  ],
-  "total_weight": 1.0
-}
-```
-
-OUTPUT: Respond ONLY with valid JSON matching the Curriculum schema. No markdown, no extra text."""
-
-
-def _collect_all_objectives(objectives: list) -> list:
-    """Flatten the objectives tree into a list of (id, definition) dicts."""
-    flat = []
-    for obj in objectives:
-        flat.append({"id": obj["id"], "definition": obj["definition"]})
-        for child in obj.get("children", []):
-            flat.append({"id": child["id"], "definition": child["definition"]})
-            for outcome in child.get("outcomes", []):
-                flat.append({"id": outcome["id"], "definition": f"Outcome: {outcome['definition']}"})
-    return flat
-
-
-def build_curriculum_prompt(training_profile: dict, modules: list, audience: dict) -> str:
-    """Build a rich, pedagogically-informed curriculum generation prompt."""
-    training = training_profile.get("training", {})
-    learner_level = audience.get("learner_level", "Intermediate")
-    bloom_target = LEARNER_LEVEL_BLOOM.get(learner_level, "Apply")
-    bloom_verbs = BLOOM_LEVEL_VERBS[bloom_target]
-
-    # --- Objectives with IDs ---
-    all_objectives = _collect_all_objectives(training_profile.get("objectives", []))
-    if all_objectives:
-        obj_lines = [
-            f"  [{o['id']}] {o['definition']}" for o in all_objectives
-        ]
-        objectives_block = "\n".join(obj_lines)
-    else:
-        objectives_block = "  (none defined — infer from training scope)"
-
-    # --- Modules with lessons and content ---
-    mod_blocks = []
-    for m in modules:
-        lines = [
-            f"MODULE {m['module_order']}: {m['name']}",
-            f"  Key concepts: {m.get('key_concepts', 'N/A')}",
-            f"  Duration: {m.get('duration', 0)} {m.get('duration_type', 'HOURS')}",
-            f"  Instructional methods: {', '.join(im['name'] for im in m.get('instructional_methods', [])) or 'N/A'}",
-            f"  Assessment types: {', '.join(m.get('assessment_types', [])) or 'N/A'}",
-            f"  Primary materials: {m.get('primary_materials', 'N/A')}",
-        ]
-        for lesson in m.get("lessons", []):
-            lines.append(f"  LESSON: {lesson['name']}")
-            lines.append(f"    Duration: {lesson.get('duration', 0)} {lesson.get('duration_type', 'HOURS')}")
-            lines.append(f"    Objective: {lesson.get('objective', 'N/A')}")
-            methods = [im['name'] for im in lesson.get('instructional_methods', [])]
-            lines.append(f"    Methods: {', '.join(methods) or 'N/A'}")
-        for content in m.get("accepted_contents", []):
-            lines.append(
-                f"  CONTENT [{content['id']}]: {content['name']} "
-                f"({content['file_type']}, level={content['level']}, "
-                f"{content.get('time_to_read_minutes', '?')} min read)"
-            )
-            if content.get("description"):
-                lines.append(f"    → {content['description'][:200]}")
-        mod_blocks.append("\n".join(lines))
-
-    # --- Audience summary ---
-    aud_lines = [
-        f"  Education: {audience.get('education_level', 'N/A')} — {audience.get('education_level_desc', '')}",
-        f"  Language: {audience.get('language_name', 'N/A')} ({audience.get('language_code', '')})",
-        f"  Learner Level: {learner_level} → target Bloom's level: {bloom_target}",
-        f"  Work Experience: {audience.get('work_experience', 'N/A')}",
-        f"  Prerequisites: {', '.join(audience.get('specific_prerequisites', [])) or 'None'}",
-        f"  Prior courses: {', '.join(audience.get('specific_courses', [])) or 'None'}",
-    ]
-
-    objective_ids_str = ", ".join(f'"{o["id"]}"' for o in all_objectives[:6])  # first 6 for mapping
-
-    return f"""Generate a complete curriculum for the following training.
-
-═══════════════════════════════════════
-TRAINING OVERVIEW
-═══════════════════════════════════════
-Title:     {training.get('title', 'Unknown')}
-Rationale: {training.get('rationale', 'N/A')}
-Scope:     {training.get('scope', 'N/A')}
-Keywords:  {', '.join(training_profile.get('keywords', []))}
-Purposes:  {', '.join(training_profile.get('purposes', []))}
-
-═══════════════════════════════════════
-AUDIENCE PROFILE
-═══════════════════════════════════════
-{chr(10).join(aud_lines)}
-
-Bloom's guidance: Write ALL lesson objectives using action verbs from the "{bloom_target}" level.
-Example verbs: {bloom_verbs}
-
-═══════════════════════════════════════
-TRAINING OBJECTIVES (use these IDs in objectives_mapping)
-═══════════════════════════════════════
-{objectives_block}
-
-═══════════════════════════════════════
-EXISTING TSP MODULES & ACCEPTED CONTENT
-═══════════════════════════════════════
-{chr(10).join(chr(10).join([block, '']) for block in mod_blocks) if mod_blocks else 'No modules defined yet.'}
-
-═══════════════════════════════════════
-GENERATION INSTRUCTIONS
-═══════════════════════════════════════
-1. Create 3–5 modules using the existing module structure as the foundation
-2. Each module: 2–4 lessons, each with a Bloom's-aligned objective and bloom_level field
-3. Each module: exactly 1 assignment (choose type: individual/group/practical/written/presentation)
-4. Each module: exactly 1 assessment (choose type: quiz/exam/project/portfolio/presentation/practical)
-5. Each module: exactly 1 rubric with EXACTLY 3 criteria, weights [0.33, 0.33, 0.34] (sum = 1.0)
-6. Fill `objective_ids` for each module with the relevant objective IDs from the list above
-7. Fill `objectives_mapping` at the top level: {{objective_id: [module_id, ...]}}
-8. Reference accepted content IDs in `content_references` within relevant lessons
-9. Adapt language complexity to {learner_level} learners
-10. Use only facts and concepts from the provided training data
-
-Objective IDs available for mapping: [{objective_ids_str}]
-
-Output the complete JSON now."""
 
 
 # ==================== Copilot Prompt ====================
@@ -558,55 +361,60 @@ async def health_check():
 
 
 @app.post("/curriculum/generate", response_model=GeneratedCurriculum)
-async def generate_curriculum(request: CurriculumRequest, tsp_client: TSPClient = Depends(get_tsp_client)):
-    """Generate (or retrieve cached) curriculum for a training."""
-    # Fetch training data
+async def generate_curriculum(
+    request: CurriculumRequest,
+    tsp_client: TSPClient = Depends(get_tsp_client),
+):
+    """
+    Generate (or retrieve cached) structured curriculum for a training.
+
+    Workflow:
+      1. Validate training exists in TSP DB
+      2. Return cached if force_regenerate=False and cache exists
+      3. Fetch modules, audience, objectives from TSP
+      4. Call curriculum_builder.generate_curriculum() → LLM + validate
+      5. Persist to ai_generated_curricula (idempotent)
+    """
     training_profile = await tsp_client.get_training_profile(request.training_id)
     if not training_profile.get("training"):
         raise HTTPException(404, f"Training {request.training_id} not found")
 
-    # Return cached curriculum if not forcing regeneration
+    # Serve from cache unless force_regenerate is set
     if not request.force_regenerate:
         cached = await tsp_client.get_latest_curriculum(request.training_id)
         if cached:
-            cached["metadata"]["from_cache"] = True
+            cached.setdefault("metadata", {})["from_cache"] = True
             return GeneratedCurriculum(**cached)
 
     modules = await tsp_client.get_modules_with_lessons(request.training_id)
     audience = await tsp_client.get_audience_profile(request.training_id)
 
-    # Build prompt
-    prompt = build_curriculum_prompt(training_profile, modules, audience)
-
-    # Call LLM with JSON output
     try:
-        curriculum_data = await call_gemma_json(
-            prompt=prompt,
-            system_prompt=CURRICULUM_SYSTEM_PROMPT,
-            schema=GeneratedCurriculum.model_json_schema(),
-            max_retries=3
+        curriculum, validation_report = await _generate_curriculum(
+            training_id=request.training_id,
+            training_profile=training_profile,
+            modules=modules,
+            audience=audience,
         )
     except LLMError as e:
         raise HTTPException(500, f"LLM generation failed: {e}")
 
-    # Inject required top-level fields the LLM may have omitted
-    curriculum_data.setdefault("training_id", request.training_id)
-    curriculum_data.setdefault("training_title", training_profile.get("training", {}).get("title", ""))
+    # Attach validation report to metadata for transparency
+    curriculum_dict = curriculum.model_dump(mode="json")
+    curriculum_dict["validation_report"] = validation_report.model_dump()
 
-    # Post-generation validation and auto-correction
-    curriculum_data, validation_report = validate_and_fix_curriculum(curriculum_data)
-    curriculum_data["validation_report"] = validation_report.model_dump()
-
-    # Save to database (idempotent)
+    # Persist (idempotent — returns same ID if identical JSON already exists)
     try:
-        response_id = await tsp_client.save_generated_curriculum(request.training_id, curriculum_data)
-        curriculum_data.setdefault("metadata", {})
-        curriculum_data["metadata"]["ai_response_id"] = response_id
-        curriculum_data["metadata"]["from_cache"] = False
+        db_id = await tsp_client.save_generated_curriculum(request.training_id, curriculum_dict)
+        curriculum_dict.setdefault("metadata", {}).update({
+            "ai_response_id": db_id,
+            "from_cache": False,
+        })
     except Exception as e:
-        print(f"Warning: Failed to save curriculum: {e}")
+        # Non-fatal — curriculum is still returned to caller
+        print(f"[Warning] Failed to persist curriculum: {e}")
 
-    return GeneratedCurriculum(**curriculum_data)
+    return GeneratedCurriculum(**curriculum_dict)
 
 
 @app.get("/curriculum/{training_id}/latest", response_model=GeneratedCurriculum)
