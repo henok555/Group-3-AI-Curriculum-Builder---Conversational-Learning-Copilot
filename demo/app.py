@@ -20,6 +20,7 @@ import json
 # ── Config ─────────────────────────────────────────────────────────────────
 API_BASE        = "http://localhost:8000"
 DEMO_TRAINING   = "45d3c920-abd2-4c4e-8fdf-497b9a6dd9fc"   # Leyu Facilitators Training
+BOA_TRAINING    = "a009175a-14dc-4104-ac97-e1180270e343"   # BoA Chatbot Capacity Building
 OTHER_TRAINING  = "00000000-0000-0000-0000-000000000000"    # Non-existent training
 # Use a real learner ID from a DIFFERENT training to trigger the unauthorized check
 # Set to a real trainee.id if available; otherwise the guardrail check will still
@@ -131,24 +132,30 @@ tab_curr, tab_cop = st.tabs(["📚  Curriculum Builder", "💬  Copilot"])
 with tab_curr:
     st.markdown("### Generate a Structured Curriculum from Real TSP Data")
 
-    col_a, col_d = st.columns(2)
+    col_a, col_b, col_d = st.columns(3)
     with col_a:
-        st.markdown('<span class="badge badge-green">Scenario (a) — Normal Flow</span>', unsafe_allow_html=True)
-        st.caption("Fetches real TSP data → calls Gemma → validates → saves to DB")
-        if st.button("▶  Real training curriculum", use_container_width=True, key="sc_a"):
+        st.markdown('<span class="badge badge-green">Scenario (a) — Leyu</span>', unsafe_allow_html=True)
+        st.caption("Baseline training with existing modules")
+        if st.button("▶  Leyu Facilitators", use_container_width=True, key="sc_a"):
             st.session_state["curr_tid"] = DEMO_TRAINING
 
+    with col_b:
+        st.markdown('<span class="badge badge-blue">Scenario (a) — BoA</span>', unsafe_allow_html=True)
+        st.caption("AI Curriculum generated from owner specs")
+        if st.button("▶  BoA Chatbot", use_container_width=True, key="sc_b"):
+            st.session_state["curr_tid"] = BOA_TRAINING
+
     with col_d:
-        st.markdown('<span class="badge badge-red">Scenario (d) — Broken Request</span>', unsafe_allow_html=True)
+        st.markdown('<span class="badge badge-red">Scenario (d) — Broken</span>', unsafe_allow_html=True)
         st.caption("Invalid training ID → 404 not found")
         if st.button("▶  Invalid training ID", use_container_width=True, key="sc_d"):
             st.session_state["curr_tid"] = OTHER_TRAINING
 
     st.divider()
-    tid_in = st.text_input("Training ID", value=st.session_state.get("curr_tid", DEMO_TRAINING), key="curr_tid_in")
+    tid_in = st.text_input("Training ID", value=st.session_state.get("curr_tid", BOA_TRAINING), key="curr_tid_in")
+    force_regen = st.checkbox("Force regenerate (bypass DB cache & re-query LLM)", value=False, key="force_regen_chk")
 
     if st.button("🚀  Generate Curriculum", type="primary", use_container_width=True, key="gen"):
-        force_regen = st.session_state.get("force_regen", False)
         with st.spinner("Fetching TSP data → building prompt → calling Gemma E4B → validating..."):
             try:
                 r = httpx.post(f"{api_url}/curriculum/generate",
@@ -180,7 +187,6 @@ with tab_curr:
                     for m in mods:
                         with st.expander(f"Module {m.get('module_order','?')}: {m.get('name','?')}", expanded=False):
                             st.markdown(f"**Key Concepts:** {m.get('key_concepts','N/A')}")
-                            # duration (real DB column name, not duration_hours)
                             st.markdown(f"**Duration:** {m.get('duration','?')} {m.get('duration_type','HOURS')}")
                             st.markdown(f"**Teaching strategy:** {m.get('teaching_strategy','N/A')}")
                             for l in m.get("lessons", []):
@@ -189,7 +195,18 @@ with tab_curr:
                                 if l.get('objective'):
                                     st.caption(f"  ↳ {l['objective']}")
                             if m.get("assessments"):
-                                st.markdown(f"**Assessment:** {m['assessments'][0].get('title','?')} ({m['assessments'][0].get('type','?')}, {m['assessments'][0].get('duration_minutes','?')} min)")
+                                asmt = m['assessments'][0]
+                                st.markdown(f"**Assessment:** {asmt.get('title','?')} ({asmt.get('type','?')}, {asmt.get('duration_minutes','?')} min)")
+                                if asmt.get("questions"):
+                                    with st.expander(f"📝 Assessment Questions ({len(asmt['questions'])})", expanded=False):
+                                        for idx, q in enumerate(asmt["questions"], 1):
+                                            q_text = q.get("question") or q.get("prompt") or ""
+                                            st.markdown(f"**Q{idx} [{q.get('points', 10)} pts]:** {q_text}")
+                                            if q.get("options"):
+                                                for opt in q["options"]:
+                                                    st.caption(f"  • {opt}")
+                                                if q.get("correct_answer"):
+                                                    st.caption(f"  *(Answer: {q['correct_answer']})*")
                             # Rubric viewer
                             for rub in m.get("rubrics", []):
                                 with st.expander(f"📋 Rubric: {rub.get('title','?')}", expanded=False):

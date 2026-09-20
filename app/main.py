@@ -13,6 +13,9 @@ import re
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 from fastapi import FastAPI, HTTPException, Depends
 

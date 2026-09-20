@@ -6,19 +6,21 @@ Only place in codebase allowed to touch TSP tables directly.
 """
 
 import os
-import json
-from typing import Any, Optional
+from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 import asyncpg
 from asyncpg.pool import Pool
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 
 @dataclass
 class TSPConfig:
     host: str = os.getenv("TSP_DB_HOST", "localhost")
     port: int = int(os.getenv("TSP_DB_PORT", "5432"))
-    user: str = os.getenv("TSP_DB_USER", "vini")
-    password: str = os.getenv("TSP_DB_PASSWORD", "")
+    user: str = os.getenv("TSP_DB_USER", "postgres")
+    password: str = os.getenv("TSP_DB_PASSWORD", "postgres")
     database: str = os.getenv("TSP_DB_NAME", "training_solutions")
     min_size: int = int(os.getenv("TSP_DB_POOL_MIN", "2"))
     max_size: int = int(os.getenv("TSP_DB_POOL_MAX", "10"))
