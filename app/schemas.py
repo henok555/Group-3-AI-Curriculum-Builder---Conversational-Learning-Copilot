@@ -21,7 +21,7 @@ Schema mapping (DB table → Pydantic model):
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -351,6 +351,24 @@ class GeneratedAssessment(BaseModel):
     rubric_id: Optional[str] = None
 
 
+class MediaResource(BaseModel):
+    """Media file, video link (e.g. YouTube), PDF, doc, or lab attached to curriculum."""
+    id: Optional[str] = None
+    name: str
+    file_type: Optional[str] = "LINK"  # VIDEO, DOCS, LAB, PDF, LINK
+    url: Optional[str] = None
+    description: Optional[str] = None
+    pedagogy_notes: Optional[str] = Field(
+        default=None,
+        description="Evaluative notes explaining why this resource is selected and what skill it reinforces"
+    )
+    difficulty_level: Optional[str] = "Intermediate"
+    estimated_time: Optional[str] = "20 mins"
+    is_primary: bool = False
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class GeneratedLesson(BaseModel):
     """AI-generated lesson within a module."""
     id: str
@@ -371,6 +389,10 @@ class GeneratedLesson(BaseModel):
     content_references: List[str] = Field(
         default_factory=list,
         description="UUIDs of ACCEPTED content items referenced by this lesson"
+    )
+    media_resources: List[MediaResource] = Field(
+        default_factory=list,
+        description="Videos, YouTube links, PDFs, or files attached to this lesson"
     )
 
 
@@ -398,6 +420,10 @@ class GeneratedModule(BaseModel):
     secondary_materials: Optional[str] = None
     digital_tools: Optional[str] = None
     references: List[str] = Field(default_factory=list)
+    media_resources: List[MediaResource] = Field(
+        default_factory=list,
+        description="Videos, YouTube links, PDFs, or files attached to this module"
+    )
     lessons: List[GeneratedLesson] = Field(min_length=2)
     assignments: List[GeneratedAssignment] = Field(min_length=1)
     assessments: List[GeneratedAssessment] = Field(min_length=1)
@@ -584,6 +610,50 @@ class CurriculumRequest(BaseModel):
         description="If False and a curriculum already exists for this training, return cached version"
     )
     options: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CustomCurriculumRequest(BaseModel):
+    """POST /curriculum/generate-custom request body for creating a curriculum from scratch."""
+    title: str = Field(description="Training title")
+    rationale: str = Field(description="Business context, goals, and problem statement")
+    scope: str = Field(description="Key topics, technical domains, and boundaries")
+    company_name: str = Field(default="Enterprise Organization", description="Company or client name")
+    industry_type: str = Field(default="Technology & Banking", description="Industry domain")
+    duration_hours: float = Field(default=12.0, ge=1.0, le=200.0, description="Total training duration in hours")
+    delivery_method: str = Field(default="BLENDED", description="OFFLINE, ONLINE, or BLENDED")
+    learner_level: str = Field(default="Intermediate", description="Beginner, Intermediate, or Advanced")
+    education_level: str = Field(default="Bachelor's Degree", description="Expected education level")
+    language: str = Field(default="English", description="Instruction language")
+    prerequisites: List[str] = Field(default_factory=list, description="Recommended prerequisites")
+    specific_objectives: List[str] = Field(default_factory=list, description="Optional custom target objectives")
+    resource_links: List[str] = Field(
+        default_factory=list,
+        description="Optional list of external video links, YouTube URLs, or document URLs to integrate"
+    )
+
+
+class DraftEnhanceRequest(BaseModel):
+    """POST /curriculum/enhance-draft request body."""
+    title: str = Field(description="Draft training title")
+    rationale: Optional[str] = Field(default="", description="Draft rationale or problem statement")
+    scope: Optional[str] = Field(default="", description="Draft topics or scope")
+    learner_level: Optional[str] = Field(default="Intermediate", description="Beginner, Intermediate, or Advanced")
+    company_name: Optional[str] = Field(default="Enterprise Organization", description="Client or company name")
+    industry_type: Optional[str] = Field(default="Technology & Banking", description="Industry domain")
+    duration_hours: Optional[float] = Field(default=None, description="Draft duration in hours")
+    prerequisites: Optional[Union[str, List[str]]] = Field(default="", description="Draft prerequisites as string or list")
+
+
+class DraftEnhanceResponse(BaseModel):
+    """POST /curriculum/enhance-draft response body."""
+    title: str
+    rationale: str
+    scope: str
+    learner_level: str = "Intermediate"
+    prerequisites: Union[str, List[str]] = ""
+    suggested_duration_hours: float = 16.0
+    enhancement_summary: str = ""
+
 
 
 class SourceAttribution(BaseModel):

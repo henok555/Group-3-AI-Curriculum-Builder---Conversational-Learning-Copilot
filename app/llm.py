@@ -114,12 +114,21 @@ async def call_gemma(
             return (content or "").strip()
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
+            err_text = e.response.text
+            # If daily free limit reached, retrying in seconds is futile and causes timeouts
+            if "free-models-per-day" in err_text or "openrouter_free_tier_daily" in err_text:
+                raise LLMError(
+                    "OpenRouter free-tier daily quota exceeded (50 free requests/day limit reached). "
+                    "Please replace OPENROUTER_API_KEY in .env with a new key or add credits."
+                ) from e
+
             if status == 429 and attempt < max_attempts:
-                wait = 10 * (2 ** (attempt - 1))
-                err_detail = e.response.text[:120].replace('\n', ' ')
-                print(f"[LLM] Rate limited (429: {err_detail}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
+                wait = 5 * attempt
+                err_detail = err_text[:120].replace('\n', ' ')
+                print(f"[LLM] Short rate limit (429: {err_detail}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
                 await _asyncio.sleep(wait)
                 continue
+
             if status == 402 and attempt < max_attempts:
                 current = payload.get("max_tokens", 4096)
                 reduced = max(1024, current // 2)

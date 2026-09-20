@@ -247,11 +247,12 @@ class TSPClient:
                 """, module_id)
                 module_dict["references"] = [r["definition"] for r in tr_rows]
 
-                # Accepted contents for this module
+                # Contents for this module and its lessons (including video/media links)
                 content_rows = await conn.fetch("""
-                    SELECT c.id, c.name, c.file_type, c.level, c.link, c.description, c.time_to_read_minutes
+                    SELECT c.id, c.name, c.file_type, c.level, c.link, c.description, c.time_to_read_minutes, c.lesson_id
                     FROM contents c
-                    WHERE c.module_id = $1 AND c.status = 'ACCEPTED'
+                    WHERE (c.module_id = $1 OR c.lesson_id IN (SELECT id FROM lessons WHERE module_id = $1))
+                      AND (c.status = 'ACCEPTED' OR (c.link IS NOT NULL AND length(trim(c.link)) > 0))
                 """, module_id)
                 module_dict["accepted_contents"] = [dict(r) for r in content_rows]
 
@@ -437,36 +438,121 @@ class TSPClient:
             """, learner_id, training_id)
             return row is not None
 
-    async def get_curriculum_history(self, training_id: str) -> list[dict]:
-        """
-        Return all generated curriculum versions for a training, newest first.
+    async def save_custom_training(
+        self,
+        training_id: str,
+        title: str,
+        rationale: str,
+        scope: str,
+        duration_hours: float,
+        delivery_method: str = "BLENDED"
+    ) -> None:
+        """Create a training record in the trainings table for a custom curriculum generated from scratch."""
+        async with self._pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO trainings (id, title, rationale, scope, duration, duration_type, delivery_method, is_deleted)
+                VALUES ($1::uuid, $2, $3, $4, $5, 'HOURS', $6, false)
+                ON CONFLICT (id) DO NOTHING
+            """, training_id, title, rationale, scope, duration_hours, delivery_method)
 
-        Returns lightweight summaries (id, generated_at, module_count) without
-        loading the full curriculum JSON — callers can request a specific version
-        by curriculum_db_id if needed.
+    async def get_all_recent_curricula(self, limit: int = 25) -> list[dict]:
+        """
+        Return the most recently generated curricula across all trainings, newest first.
         """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT
                     id,
+                    training_id,
                     generated_at,
-                    jsonb_array_length(curriculum_json->'modules') AS module_count,
-                    curriculum_json->>'training_title'             AS training_title,
-                    curriculum_json->'validation_report'           AS validation_report
+                    jsonb_array_length(COALESCE(curriculum_json->'modules', '[]'::jsonb)) AS module_count,
+                    curriculum_json->>'training_title'                                     AS training_title,
+                    COALESCE(curriculum_json->'metadata'->>'mode', 'db_training')          AS mode,
+                    curriculum_json->'validation_report'                                   AS validation_report
                 FROM ai_generated_curricula
-                WHERE training_id = $1
+                ORDER BY generated_at DESC
+                LIMIT $1
+            """, limit)
+
+            def _safe_json(v):
+
+                if not v:
+                    return {}
+                if isinstance(v, dict):
+                    return v
+                try:
+                    return json.loads(v)
+                except Exception:
+                    return {}
+
+            return [
+                {
+                    "curriculum_db_id": str(r["id"]),
+                    "training_id": str(r["training_id"]),
+                    "generated_at": str(r["generated_at"]),
+                    "module_count": r["module_count"],
+                    "training_title": r["training_title"] or "Untitled Curriculum",
+                    "mode": r["mode"],
+                    "validation_report": _safe_json(r["validation_report"]),
+                }
+                for r in rows
+            ]
+
+    async def get_curriculum_by_db_id(self, curriculum_db_id: str) -> Optional[dict]:
+        """Retrieve a specific curriculum by its ai_generated_curricula UUID."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT curriculum_json, generated_at, id, training_id
+                FROM ai_generated_curricula
+                WHERE id = $1::uuid
+            """, curriculum_db_id)
+            if not row:
+                return None
+            raw_json = row["curriculum_json"]
+            data = json.loads(raw_json) if isinstance(raw_json, str) else dict(raw_json)
+            data.setdefault("metadata", {})
+            data["metadata"]["curriculum_db_id"] = str(row["id"])
+            data["metadata"]["generated_at_db"] = str(row["generated_at"])
+            data["metadata"]["from_cache"] = True
+            return data
+
+    async def get_curriculum_history(self, training_id: str) -> list[dict]:
+        """Return all generated curriculum versions for a training, newest first."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    id,
+                    generated_at,
+                    jsonb_array_length(COALESCE(curriculum_json->'modules', '[]'::jsonb)) AS module_count,
+                    curriculum_json->>'training_title'                                     AS training_title,
+                    curriculum_json->'validation_report'                                   AS validation_report
+                FROM ai_generated_curricula
+                WHERE training_id = $1::uuid
                 ORDER BY generated_at DESC
             """, training_id)
+            def _safe_json(v):
+                if not v:
+                    return {}
+                if isinstance(v, dict):
+                    return v
+                try:
+                    return json.loads(v)
+                except Exception:
+                    return {}
+
             return [
                 {
                     "curriculum_db_id": str(r["id"]),
                     "generated_at": str(r["generated_at"]),
                     "module_count": r["module_count"],
                     "training_title": r["training_title"],
-                    "validation_report": dict(r["validation_report"]) if r["validation_report"] else {},
+                    "validation_report": _safe_json(r["validation_report"]),
                 }
                 for r in rows
             ]
+
+
+
 
 
 
