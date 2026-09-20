@@ -432,6 +432,8 @@ class TSPClient:
 
     async def is_learner_enrolled(self, learner_id: str, training_id: str) -> bool:
         """Check if a trainee is enrolled in the specified training."""
+        if self._pool is None:
+            return False
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT 1 FROM trainees WHERE id = $1 AND training_id = $2
@@ -550,6 +552,43 @@ class TSPClient:
                 }
                 for r in rows
             ]
+
+    # ==================== RAG Indexing Helpers ====================
+
+    async def get_all_trainings(self) -> list[dict]:
+        """Get all active trainings (id, title) for batch indexing."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, title, professional_background, delivery_method
+                FROM trainings
+                WHERE is_deleted = false
+                ORDER BY created_at DESC
+            """)
+            return [dict(r) for r in rows]
+
+    async def delete_training_chunks(self, training_id: str) -> int:
+        """Delete existing chunks for a training before a full clean re-index."""
+        async with self._pool.acquire() as conn:
+            res = await conn.execute("""
+                DELETE FROM ai_content_chunks c
+                USING modules m
+                WHERE c.module_id = m.id AND m.training_id = $1::uuid
+            """, training_id)
+            # res format: "DELETE <count>"
+            try:
+                return int(res.split()[-1])
+            except Exception:
+                return 0
+
+    async def count_training_chunks(self, training_id: str) -> int:
+        """Count total chunks stored in DB for a specific training."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT COUNT(*) as n FROM ai_content_chunks c
+                JOIN modules m ON m.id = c.module_id
+                WHERE m.training_id = $1::uuid
+            """, training_id)
+            return int(row["n"]) if row else 0
 
 
 
