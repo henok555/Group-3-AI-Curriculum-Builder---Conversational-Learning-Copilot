@@ -6,6 +6,7 @@ Only place in codebase allowed to touch TSP tables directly.
 """
 
 import os
+import json
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 import asyncpg
@@ -421,7 +422,8 @@ class TSPClient:
             """, training_id)
             if not row:
                 return None
-            data = dict(row["curriculum_json"])
+            raw_json = row["curriculum_json"]
+            data = json.loads(raw_json) if isinstance(raw_json, str) else dict(raw_json)
             data.setdefault("metadata", {})
             data["metadata"]["curriculum_db_id"] = str(row["id"])
             data["metadata"]["generated_at_db"] = str(row["generated_at"])

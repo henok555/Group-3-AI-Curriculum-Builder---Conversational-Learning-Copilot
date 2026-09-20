@@ -218,6 +218,84 @@ with tab_curr:
                                             if score in lvls:
                                                 st.caption(f"  Score {score}: {lvls[score]}")
 
+                    # Extended Artifacts Accordions
+                    ap = d.get("audience_profile")
+                    if ap:
+                        with st.expander("👥 Audience Profile & Prerequisites", expanded=False):
+                            col_p1, col_p2 = st.columns(2)
+                            with col_p1:
+                                st.markdown(f"**Learner Level:** {ap.get('learner_level','?')}")
+                                st.markdown(f"**Education Level:** {ap.get('education_level','?')}")
+                                st.markdown(f"**Language:** {ap.get('language','?')}")
+                                st.markdown(f"**Work Experience:** {ap.get('work_experience','?')}")
+                            with col_p2:
+                                st.markdown(f"**Certifications:** {ap.get('certifications','None')}")
+                                st.markdown(f"**Licenses:** {ap.get('licenses','None')}")
+                            if ap.get("specific_courses"):
+                                st.markdown("**Recommended Prior Courses:**")
+                                for c in ap["specific_courses"]:
+                                    st.caption(f"  • {c}")
+                            if ap.get("specific_prerequisites"):
+                                st.markdown("**Prerequisites:**")
+                                for p in ap["specific_prerequisites"]:
+                                    st.caption(f"  • {p}")
+
+                    tp = d.get("training_profile")
+                    if tp:
+                        with st.expander("🎯 Training Profile & Objectives", expanded=False):
+                            if tp.get("general_objectives"):
+                                st.markdown("**General Objectives:**")
+                                for go in tp["general_objectives"]:
+                                    st.markdown(f"- {go}")
+                            if tp.get("specific_objectives"):
+                                st.markdown("**Specific Objectives & Outcomes:**")
+                                for so in tp["specific_objectives"]:
+                                    st.markdown(f"**Objective:** {so.get('objective','')}")
+                                    for out in so.get("outcomes", []):
+                                        st.caption(f"  ↳ *Outcome:* {out}")
+                            if tp.get("learning_style_preferences"):
+                                st.markdown(f"**Learning Styles:** {', '.join(tp['learning_style_preferences'])}")
+
+                    surveys = d.get("surveys", [])
+                    if surveys:
+                        with st.expander(f"📋 Surveys ({len(surveys)}: Baseline & Endline)", expanded=False):
+                            for s in surveys:
+                                st.markdown(f"#### {s.get('name','Survey')} `[{s.get('survey_type','')}]`")
+                                st.caption(s.get('description',''))
+                                for sec in s.get("sections", []):
+                                    st.markdown(f"**Section: {sec.get('title','')}** — *{sec.get('description','')}*")
+                                    for entry in sec.get("entries", []):
+                                        q_type = entry.get("question_type","RADIO")
+                                        req = "(Required)" if entry.get("is_required") else "(Optional)"
+                                        st.markdown(f"  **Q{entry.get('question_number','')} [{q_type}]:** {entry.get('question','')} *{req}*")
+                                        for ch in entry.get("choices", []):
+                                            st.caption(f"    [{ch.get('choice_order','')}] {ch.get('choice_text','')}")
+                                st.divider()
+
+                    formal_asmts = d.get("formal_assessments", [])
+                    if formal_asmts:
+                        with st.expander(f"🏆 Formal Assessments ({len(formal_asmts)}: Pre & Post)", expanded=False):
+                            for fa in formal_asmts:
+                                st.markdown(f"#### {fa.get('name','Assessment')} `[{fa.get('assessment_type','')}]`")
+                                st.caption(f"{fa.get('description','')} | ⏱ {fa.get('duration_minutes',30)} mins | Max Attempts: {fa.get('max_attempts',1)} | Pass: {fa.get('passing_score',70)}%")
+                                for sec in fa.get("sections", []):
+                                    st.markdown(f"**Section {sec.get('section_number',1)}: {sec.get('title','')}**")
+                                    for entry in sec.get("entries", []):
+                                        st.markdown(f"  **Q{entry.get('question_number','')} [{entry.get('weight',10)} pts]:** {entry.get('question','')}")
+                                        for ch in entry.get("choices", []):
+                                            correct_tag = " ✔ (Correct)" if ch.get("is_correct") else ""
+                                            st.caption(f"    • {ch.get('choice_text','')}{correct_tag}")
+                                st.divider()
+
+                    creqs = d.get("content_requests", [])
+                    if creqs:
+                        with st.expander(f"📦 Content Requests ({len(creqs)} developer items)", expanded=False):
+                            for cr in creqs:
+                                st.markdown(f"**{cr.get('content_name','')}** `[{cr.get('content_type','')}]`")
+                                st.caption(f"Target: Module {cr.get('target_module','')} | Lesson: {cr.get('target_lesson','N/A')}")
+                                st.markdown(f"> {cr.get('description','')}")
+                                st.divider()
+
                     with st.expander("📋 Full JSON", expanded=False):
                         st.json(d)
 

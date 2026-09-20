@@ -422,6 +422,122 @@ class CurriculumValidationReport(BaseModel):
     objectives_mapping_inferred: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Extended Curriculum Artifacts (Matching TSP database tables & manual)
+# ---------------------------------------------------------------------------
+
+class GeneratedAudienceProfile(BaseModel):
+    """
+    Generated audience profile matching public.audience_profiles and child tables.
+    """
+    learner_level: str = Field(default="Intermediate", description="Beginner, Intermediate, Advanced, or Expert")
+    education_level: str = Field(default="Bachelor’s Degree", description="e.g. Bachelor’s Degree, TVET Diploma, etc.")
+    language: str = Field(default="English", description="Primary language of delivery")
+    work_experience: str = Field(default="Permanent Full-Time Job", description="e.g. Permanent Full-Time Job, Entry-Level")
+    certifications: Optional[str] = Field(default=None, description="Required or recommended certifications")
+    licenses: Optional[str] = Field(default=None, description="Required licenses or professional credentials")
+    specific_courses: List[str] = Field(default_factory=list, description="Prerequisite courses (public.specific_courses)")
+    specific_prerequisites: List[str] = Field(default_factory=list, description="Prerequisite skills/knowledge (public.specific_prerequisites)")
+
+
+class GeneratedObjectiveOutcome(BaseModel):
+    """Specific learning objective and associated outcomes (public.objectives & public.outcomes)."""
+    objective: str = Field(description="Specific measurable learning objective (Bloom's-aligned)")
+    outcomes: List[str] = Field(default_factory=list, description="Demonstrable learner outcomes upon completion")
+
+
+class GeneratedTrainingProfile(BaseModel):
+    """
+    Generated training profile matching public.objectives, outcomes, and preferences.
+    """
+    general_objectives: List[str] = Field(default_factory=list, description="High-level overarching training objectives")
+    specific_objectives: List[GeneratedObjectiveOutcome] = Field(default_factory=list, description="Targeted competency objectives and outcomes")
+    learning_style_preferences: List[str] = Field(default_factory=list, description="e.g. Visual, Practical Hands-on, Collaborative")
+
+
+class GeneratedSurveyChoice(BaseModel):
+    """Choice item for a survey question (public.survey_entry_choices)."""
+    choice_order: str = Field(description="A, B, C, D, etc.")
+    choice_text: str
+
+
+class GeneratedSurveyQuestion(BaseModel):
+    """Question entry in a survey section (public.survey_entries)."""
+    question_number: int
+    question: str
+    question_type: Literal["TEXT", "RADIO", "CHECKBOX", "GRID"] = "RADIO"
+    is_required: bool = True
+    is_follow_up: bool = False
+    parent_choice: Optional[str] = None
+    choices: List[GeneratedSurveyChoice] = Field(default_factory=list)
+
+
+class GeneratedSurveySection(BaseModel):
+    """Section within a survey (public.survey_sections)."""
+    title: str
+    description: str
+    entries: List[GeneratedSurveyQuestion] = Field(default_factory=list)
+
+
+class GeneratedSurvey(BaseModel):
+    """
+    Baseline or Endline evaluation survey (public.surveys).
+    """
+    name: str
+    survey_type: Literal["BASELINE", "ENDLINE", "OTHER"]
+    description: str
+    sections: List[GeneratedSurveySection] = Field(default_factory=list)
+
+
+class GeneratedFormalAssessmentChoice(BaseModel):
+    """Choice item for an assessment question (public.assessment_entry_choices)."""
+    choice_text: str
+    is_correct: bool = False
+
+
+class GeneratedFormalAssessmentQuestion(BaseModel):
+    """Question entry in a formal assessment section (public.assessment_entries)."""
+    question_number: int
+    question: str
+    question_type: Literal["RADIO", "CHECKBOX", "TEXT", "FILE_UPLOAD"] = "RADIO"
+    weight: float = Field(default=10.0, description="Points/weight for this question")
+    choices: List[GeneratedFormalAssessmentChoice] = Field(default_factory=list)
+
+
+class GeneratedFormalAssessmentSection(BaseModel):
+    """Section within a formal assessment (public.assessment_sections)."""
+    section_number: int
+    title: str
+    description: str
+    entries: List[GeneratedFormalAssessmentQuestion] = Field(default_factory=list)
+
+
+class GeneratedFormalAssessment(BaseModel):
+    """
+    Pre-assessment, Continuous Assessment Test (CAT), or Post-assessment (public.assessments).
+    """
+    name: str
+    assessment_type: Literal["PRE_POST", "CAT", "OTHER"]
+    description: str
+    is_timed: bool = True
+    duration_minutes: int = Field(gt=0, description="Duration limit in minutes")
+    max_attempts: int = Field(default=1, ge=1)
+    passing_score: float = Field(default=70.0, ge=0.0, le=100.0)
+    assessment_target: Literal["INDIVIDUAL", "GROUP"] = "INDIVIDUAL"
+    sections: List[GeneratedFormalAssessmentSection] = Field(default_factory=list)
+
+
+class GeneratedContentRequest(BaseModel):
+    """
+    Specification for materials to request from content developers (public.contents / manual 3.5).
+    """
+    content_name: str
+    content_type: str = Field(description="e.g. SLIDES, DOCUMENT, VIDEO, LAB_MANUAL, CODE_NOTEBOOK")
+    target_module: str
+    target_lesson: Optional[str] = None
+    description: str
+
+
 class GeneratedCurriculum(BaseModel):
     """
     Top-level AI-generated curriculum response.
@@ -436,6 +552,13 @@ class GeneratedCurriculum(BaseModel):
     objectives_mapping: Dict[str, List[str]] = Field(default_factory=dict)
     validation_report: Optional[CurriculumValidationReport] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    # Extended artifacts matching manual (doc.md) & DB tables
+    audience_profile: Optional[GeneratedAudienceProfile] = None
+    training_profile: Optional[GeneratedTrainingProfile] = None
+    surveys: List[GeneratedSurvey] = Field(default_factory=list)
+    formal_assessments: List[GeneratedFormalAssessment] = Field(default_factory=list)
+    content_requests: List[GeneratedContentRequest] = Field(default_factory=list)
 
     @field_validator("modules")
     @classmethod

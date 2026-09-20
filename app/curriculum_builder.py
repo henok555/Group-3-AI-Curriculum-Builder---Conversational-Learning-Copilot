@@ -661,6 +661,8 @@ def _normalize_llm_output(data: dict) -> dict:
 
 def validate_and_fix_curriculum(
     curriculum_data: dict,
+    training_profile: Optional[dict] = None,
+    audience: Optional[dict] = None,
 ) -> tuple[dict, CurriculumValidationReport]:
     """
     Post-generation validation and auto-correction pass.
@@ -775,7 +777,430 @@ def validate_and_fix_curriculum(
                     f"completing the lesson objective."
                 )
 
+    # ── 9. Ensure extended artifacts (manual doc.md & DB tables) ─────────────
+    _ensure_audience_profile(curriculum_data, audience=audience, training_profile=training_profile)
+    _ensure_training_profile(curriculum_data, training_profile=training_profile)
+    _ensure_surveys(curriculum_data, training_profile=training_profile)
+    _ensure_formal_assessments(curriculum_data, training_profile=training_profile)
+    _ensure_content_requests(curriculum_data, training_profile=training_profile)
+
     return curriculum_data, report
+
+
+def _ensure_audience_profile(
+    data: dict,
+    audience: Optional[dict] = None,
+    training_profile: Optional[dict] = None,
+) -> None:
+    ap = data.get("audience_profile")
+    if not isinstance(ap, dict):
+        ap = {}
+    aud = audience or {}
+    tp = (training_profile or {}).get("training") or (training_profile or {})
+    title = tp.get("title", data.get("training_title", "Training"))
+
+    if not ap.get("learner_level"):
+        ap["learner_level"] = aud.get("learner_level", "Advanced")
+    if not ap.get("education_level"):
+        ap["education_level"] = aud.get("education_level", "Bachelor’s Degree")
+    if not ap.get("language"):
+        ap["language"] = aud.get("language_name", aud.get("language", "English"))
+    if not ap.get("work_experience"):
+        ap["work_experience"] = aud.get("work_experience", "Permanent Full-Time Job")
+    if not ap.get("certifications"):
+        ap["certifications"] = aud.get("certifications") or f"Relevant IT/operational foundation certification or equivalent experience in {title}"
+    if not ap.get("licenses"):
+        ap["licenses"] = aud.get("licenses")
+    if not ap.get("specific_courses"):
+        ap["specific_courses"] = aud.get("specific_courses") or [
+            f"Foundations of {title.split(' ')[0]} Systems",
+            "Enterprise Digital Workflow Management",
+        ]
+    if not ap.get("specific_prerequisites"):
+        ap["specific_prerequisites"] = aud.get("specific_prerequisites") or [
+            "Familiarity with enterprise software interfaces and digital operational procedures",
+            "Basic understanding of core banking / customer service lifecycle processes",
+        ]
+    data["audience_profile"] = ap
+
+
+def _ensure_training_profile(
+    data: dict,
+    training_profile: Optional[dict] = None,
+) -> None:
+    tp_out = data.get("training_profile")
+    if not isinstance(tp_out, dict):
+        tp_out = {}
+    tp = (training_profile or {}).get("training") or (training_profile or {})
+    title = tp.get("title", data.get("training_title", "Training"))
+    mods = data.get("modules", [])
+
+    if not tp_out.get("general_objectives"):
+        tp_out["general_objectives"] = [
+            f"Equip operational and technical teams with end-to-end capabilities to configure, monitor, and optimize {title}.",
+            f"Establish standard incident management, escalation, and troubleshooting protocols across enterprise service channels.",
+            f"Ensure compliance with operational governance, data security, and audit readiness standards.",
+        ]
+
+    if not tp_out.get("specific_objectives"):
+        spec_objs = []
+        for m in mods:
+            m_name = m.get("name", "Module")
+            spec_objs.append({
+                "objective": f"Deconstruct and apply the core principles, workflows, and tools of {m_name}.",
+                "outcomes": [
+                    f"Accurately diagnose and resolve standard operational scenarios within {m_name}.",
+                    f"Execute role-specific tasks and workflows adhering to quality benchmarks in {m_name}.",
+                ],
+            })
+        tp_out["specific_objectives"] = spec_objs
+
+    if not tp_out.get("learning_style_preferences"):
+        tp_out["learning_style_preferences"] = [
+            "Practical Hands-on Simulation",
+            "Visual Architecture & Workflow Mapping",
+            "Case-Based Problem Solving & Guided Q&A",
+        ]
+    data["training_profile"] = tp_out
+
+
+def _ensure_surveys(
+    data: dict,
+    training_profile: Optional[dict] = None,
+) -> None:
+    existing = data.get("surveys")
+    if isinstance(existing, list) and len(existing) >= 2:
+        for s in existing:
+            stype = str(s.get("survey_type", "OTHER")).upper()
+            s["survey_type"] = stype if stype in {"BASELINE", "ENDLINE", "OTHER"} else ("BASELINE" if "base" in stype.lower() else "ENDLINE")
+        return
+
+    tp = (training_profile or {}).get("training") or (training_profile or {})
+    title = tp.get("title", data.get("training_title", "Training"))
+
+    baseline_survey = {
+        "name": f"{title} — Baseline Diagnostic Survey",
+        "survey_type": "BASELINE",
+        "description": "Pre-training diagnostic survey to evaluate participant prior background, baseline skills, and specific learning objectives.",
+        "sections": [
+            {
+                "title": "Demographics & Current Role Context",
+                "description": "Information regarding your professional role and daily system interactions",
+                "entries": [
+                    {
+                        "question_number": 1,
+                        "question": "What best describes your primary role and responsibility in relation to this training?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "System Administrator / Technical Support"},
+                            {"choice_order": "B", "choice_text": "Customer Operations Specialist / Frontline Agent"},
+                            {"choice_order": "C", "choice_text": "Team Supervisor / Business Unit Lead"},
+                            {"choice_order": "D", "choice_text": "Product or Compliance Manager"},
+                        ],
+                    },
+                    {
+                        "question_number": 2,
+                        "question": "How frequently do you currently manage or interact with digital systems in your workflows?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Daily / Core part of my job"},
+                            {"choice_order": "B", "choice_text": "Weekly / Regular basis"},
+                            {"choice_order": "C", "choice_text": "Occasionally / As needed"},
+                            {"choice_order": "D", "choice_text": "Rarely or Never"},
+                        ],
+                    },
+                ],
+            },
+            {
+                "title": "Baseline Competency & Learning Expectations",
+                "description": "Self-assessment of prior familiarity and key goals for the course",
+                "entries": [
+                    {
+                        "question_number": 3,
+                        "question": f"How would you rate your current baseline proficiency with {title} concepts and workflows?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Novice (No prior hands-on experience)"},
+                            {"choice_order": "B", "choice_text": "Basic (Understand core terminology and high-level concepts)"},
+                            {"choice_order": "C", "choice_text": "Competent (Have performed basic operational tasks)"},
+                            {"choice_order": "D", "choice_text": "Advanced (Comfortable troubleshooting and executing workflows)"},
+                        ],
+                    },
+                    {
+                        "question_number": 4,
+                        "question": "Which areas of the training are most crucial for your day-to-day effectiveness?",
+                        "question_type": "CHECKBOX",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Architecture, system setup, and configuration"},
+                            {"choice_order": "B", "choice_text": "Standard user workflows and role-based tasks"},
+                            {"choice_order": "C", "choice_text": "Incident triage, escalation, and troubleshooting"},
+                            {"choice_order": "D", "choice_text": "Performance monitoring and quality reporting"},
+                        ],
+                    },
+                    {
+                        "question_number": 5,
+                        "question": "What specific operational challenge or bottleneck do you hope to solve through this training?",
+                        "question_type": "TEXT",
+                        "is_required": False,
+                        "is_follow_up": False,
+                        "choices": [],
+                    },
+                ],
+            },
+        ],
+    }
+
+    endline_survey = {
+        "name": f"{title} — Endline Evaluation & Impact Survey",
+        "survey_type": "ENDLINE",
+        "description": "Post-training evaluation measuring knowledge acquisition, instructional delivery quality, and workplace applicability.",
+        "sections": [
+            {
+                "title": "Competency Gains & Learning Impact",
+                "description": "Evaluate your skill progression and practical readiness after training",
+                "entries": [
+                    {
+                        "question_number": 1,
+                        "question": "To what degree did this training improve your ability to execute tasks independently?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Significantly improved my confidence and independence"},
+                            {"choice_order": "B", "choice_text": "Moderately improved my capabilities"},
+                            {"choice_order": "C", "choice_text": "Slightly improved; still require periodic guidance"},
+                            {"choice_order": "D", "choice_text": "Did not noticeably improve my performance"},
+                        ],
+                    },
+                    {
+                        "question_number": 2,
+                        "question": "How relevant were the practical scenarios and hands-on exercises to your actual work?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Extremely relevant — directly mirrored workplace challenges"},
+                            {"choice_order": "B", "choice_text": "Mostly relevant with useful practical takeaways"},
+                            {"choice_order": "C", "choice_text": "Somewhat theoretical; limited direct applicability"},
+                            {"choice_order": "D", "choice_text": "Not relevant to my current role"},
+                        ],
+                    },
+                ],
+            },
+            {
+                "title": "Instructional Quality & Course Feedback",
+                "description": "Feedback on training delivery, materials, and future recommendations",
+                "entries": [
+                    {
+                        "question_number": 3,
+                        "question": "How would you rate the overall instructional delivery and clarity of explanation?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Excellent — clear, engaging, and well-paced"},
+                            {"choice_order": "B", "choice_text": "Good — covered content thoroughly"},
+                            {"choice_order": "C", "choice_text": "Fair — pacing or explanations could improve"},
+                            {"choice_order": "D", "choice_text": "Poor — unclear explanations or inadequate materials"},
+                        ],
+                    },
+                    {
+                        "question_number": 4,
+                        "question": "What recommendations do you have to enhance future iterations of this curriculum?",
+                        "question_type": "TEXT",
+                        "is_required": False,
+                        "is_follow_up": False,
+                        "choices": [],
+                    },
+                ],
+            },
+        ],
+    }
+
+    data["surveys"] = [baseline_survey, endline_survey]
+
+
+def _ensure_formal_assessments(
+    data: dict,
+    training_profile: Optional[dict] = None,
+) -> None:
+    existing = data.get("formal_assessments")
+    if isinstance(existing, list) and len(existing) >= 2:
+        for a in existing:
+            atype = str(a.get("assessment_type", "PRE_POST")).upper()
+            a["assessment_type"] = atype if atype in {"PRE_POST", "CAT", "OTHER"} else "PRE_POST"
+            atarget = str(a.get("assessment_target", "INDIVIDUAL")).upper()
+            a["assessment_target"] = atarget if atarget in {"INDIVIDUAL", "GROUP"} else "INDIVIDUAL"
+            dur = a.get("duration_minutes", 30)
+            a["duration_minutes"] = int(dur) if isinstance(dur, (int, float)) and dur > 0 else 30
+        return
+
+    tp = (training_profile or {}).get("training") or (training_profile or {})
+    title = tp.get("title", data.get("training_title", "Training"))
+    mods = data.get("modules", [])
+    m1_name = mods[0].get("name", "Foundational Concepts") if mods else "Foundational Concepts"
+
+    pre_assessment = {
+        "name": f"{title} — Diagnostic Pre-Assessment",
+        "assessment_type": "PRE_POST",
+        "description": "Baseline assessment to measure incoming knowledge, prerequisite grasp, and foundational domain concepts before instruction begins.",
+        "is_timed": True,
+        "duration_minutes": 25,
+        "max_attempts": 1,
+        "passing_score": 60.0,
+        "assessment_target": "INDIVIDUAL",
+        "sections": [
+            {
+                "section_number": 1,
+                "title": f"Section 1: Prerequisite & Systems Knowledge ({m1_name})",
+                "description": "Evaluates foundational terminology, system principles, and operational context.",
+                "entries": [
+                    {
+                        "question_number": 1,
+                        "question": f"What is the primary operational objective of implementing {title} in an enterprise setting?",
+                        "question_type": "RADIO",
+                        "weight": 10.0,
+                        "choices": [
+                            {"choice_text": "Reduce routine overhead while maintaining 24/7 service availability and accuracy", "is_correct": True},
+                            {"choice_text": "Completely replace human operational oversight across all channels", "is_correct": False},
+                            {"choice_text": "Store unstructured data without audit logging", "is_correct": False},
+                            {"choice_text": "Bypass compliance requirements for digital interactions", "is_correct": False},
+                        ],
+                    },
+                    {
+                        "question_number": 2,
+                        "question": "When a digital workflow encounters an exception or unhandled request, what is the standard protocol?",
+                        "question_type": "RADIO",
+                        "weight": 10.0,
+                        "choices": [
+                            {"choice_text": "Trigger a controlled fallback and escalate to human operators with session context", "is_correct": True},
+                            {"choice_text": "Silently drop the request and restart the service", "is_correct": False},
+                            {"choice_text": "Generate a generic error and terminate the connection", "is_correct": False},
+                            {"choice_text": "Repeat the previous action in an infinite loop", "is_correct": False},
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+
+    post_assessment = {
+        "name": f"{title} — Comprehensive Post-Training Exam",
+        "assessment_type": "PRE_POST",
+        "description": "Summative assessment validating technical mastery, workflow execution, and troubleshooting competency across all completed modules.",
+        "is_timed": True,
+        "duration_minutes": 60,
+        "max_attempts": 2,
+        "passing_score": 75.0,
+        "assessment_target": "INDIVIDUAL",
+        "sections": [
+            {
+                "section_number": 1,
+                "title": "Section 1: Architectural Foundations & Workflows",
+                "description": "Validates system component knowledge, role boundaries, and end-to-end operational flows.",
+                "entries": [
+                    {
+                        "question_number": 1,
+                        "question": "Which mechanism ensures traceability and auditability across all customer interactions and system decisions?",
+                        "question_type": "RADIO",
+                        "weight": 10.0,
+                        "choices": [
+                            {"choice_text": "Centralized transaction logging with immutable audit trails", "is_correct": True},
+                            {"choice_text": "Ephemeral client-side browser caching", "is_correct": False},
+                            {"choice_text": "Periodic manual spreadsheet reconciliations", "is_correct": False},
+                            {"choice_text": "Unindexed system log printouts", "is_correct": False},
+                        ],
+                    },
+                    {
+                        "question_number": 2,
+                        "question": "In a scenario with degraded system performance, how should workload prioritization be applied?",
+                        "question_type": "RADIO",
+                        "weight": 10.0,
+                        "choices": [
+                            {"choice_text": "Prioritize critical core transactions while throttling non-essential background tasks", "is_correct": True},
+                            {"choice_text": "Reject all incoming requests indiscriminately", "is_correct": False},
+                            {"choice_text": "Disable all authentication and security checks to save bandwidth", "is_correct": False},
+                            {"choice_text": "Queue all transactions with unlimited timeout", "is_correct": False},
+                        ],
+                    },
+                ],
+            },
+            {
+                "section_number": 2,
+                "title": "Section 2: Incident Triage & Scenario Troubleshooting",
+                "description": "Scenario-based questions testing diagnostic reasoning and appropriate escalation procedures.",
+                "entries": [
+                    {
+                        "question_number": 3,
+                        "question": "A sudden surge of unrecognized transaction formats triggers widespread validation errors. What is the immediate first action?",
+                        "question_type": "RADIO",
+                        "weight": 15.0,
+                        "choices": [
+                            {"choice_text": "Isolate the ingress channel, engage the incident triage team, and review payload logs against current schema specifications", "is_correct": True},
+                            {"choice_text": "Delete recent database entries to free memory", "is_correct": False},
+                            {"choice_text": "Wait for customer complaint volume to subside", "is_correct": False},
+                            {"choice_text": "Revert the core banking database without taking snapshots", "is_correct": False},
+                        ],
+                    },
+                    {
+                        "question_number": 4,
+                        "question": "Detail the 3-step triage and resolution pathway when a high-priority customer dispute cannot be verified by the automated system.",
+                        "question_type": "TEXT",
+                        "weight": 15.0,
+                        "choices": [],
+                    },
+                ],
+            },
+        ],
+    }
+
+    data["formal_assessments"] = [pre_assessment, post_assessment]
+
+
+def _ensure_content_requests(
+    data: dict,
+    training_profile: Optional[dict] = None,
+) -> None:
+    existing = data.get("content_requests")
+    if isinstance(existing, list) and len(existing) >= 2:
+        return
+
+    tp = (training_profile or {}).get("training") or (training_profile or {})
+    title = tp.get("title", data.get("training_title", "Training"))
+    mods = data.get("modules", [])
+
+    reqs = []
+    for idx, m in enumerate(mods, 1):
+        m_name = m.get("name", f"Module {idx}")
+        m_id = m.get("id", f"mod-{idx}")
+        lessons = m.get("lessons", [])
+        l_id = lessons[0].get("id") if lessons else None
+
+        reqs.append({
+            "content_name": f"{m_name} — Presentation Slide Deck & Instructor Notes",
+            "content_type": "SLIDES",
+            "target_module": m_id,
+            "target_lesson": l_id,
+            "description": f"Comprehensive slide presentation covering {m_name}, detailing {m.get('key_concepts', 'key concepts')}, architecture diagrams, and instructor talking points.",
+        })
+
+    reqs.append({
+        "content_name": f"{title} — Practical Simulation & Lab Exercise Guide",
+        "content_type": "LAB_MANUAL",
+        "target_module": mods[0].get("id", "mod-1") if mods else "mod-1",
+        "target_lesson": None,
+        "description": f"Step-by-step participant laboratory manual with scenario walkthroughs, sample datasets, troubleshooting checklists, and solution guides for {title}.",
+    })
+
+    data["content_requests"] = reqs
 
 
 # ---------------------------------------------------------------------------
@@ -839,7 +1264,7 @@ async def generate_curriculum(
         len(raw.get("modules", [])),
     )
 
-    fixed, report = validate_and_fix_curriculum(raw)
+    fixed, report = validate_and_fix_curriculum(raw, training_profile=training_profile, audience=audience)
 
     if report.rubrics_weight_normalized or report.rubrics_criteria_padded:
         logger.warning(

@@ -104,9 +104,14 @@ async def main(training_id: str, output_file: str | None, force: bool, scratch: 
         # ── Stats ─────────────────────────────────────────────────────────
         total_lessons = sum(len(m.lessons) for m in curriculum.modules)
         print(f"\n[Curriculum Stats]")
-        print(f"  Modules  : {len(curriculum.modules)}")
-        print(f"  Lessons  : {total_lessons}")
-        print(f"  Title    : {curriculum.training_title}")
+        print(f"  Modules             : {len(curriculum.modules)}")
+        print(f"  Lessons             : {total_lessons}")
+        print(f"  Surveys             : {len(curriculum.surveys)} (Baseline & Endline)")
+        print(f"  Formal Assessments  : {len(curriculum.formal_assessments)} (Pre & Post Exams)")
+        print(f"  Content Requests    : {len(curriculum.content_requests)} (Slide decks & Lab manuals)")
+        if curriculum.audience_profile:
+            print(f"  Audience Profile    : {curriculum.audience_profile.learner_level} | {curriculum.audience_profile.education_level}")
+        print(f"  Title               : {curriculum.training_title}")
 
         # ── Save to DB ────────────────────────────────────────────────────
         try:
