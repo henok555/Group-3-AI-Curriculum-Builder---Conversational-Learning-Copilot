@@ -28,21 +28,22 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add project root to path so `app.*` imports work when run from scripts/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 from app.tsp_client import TSPClient
 from app.curriculum_builder import generate_curriculum
 
 
-async def main(training_id: str, output_file: str | None, force: bool) -> None:
+async def main(training_id: str, output_file: str | None, force: bool, scratch: bool = False) -> None:
     print(f"\n[CurriculumCLI] Starting for training_id: {training_id}")
     print(f"[CurriculumCLI] Force regenerate: {force}")
+    print(f"[CurriculumCLI] From scratch: {scratch}")
 
     async with TSPClient() as db:
         # ── Check training exists ─────────────────────────────────────────
@@ -65,16 +66,20 @@ async def main(training_id: str, output_file: str | None, force: bool) -> None:
                 return
 
         # ── Fetch context data ────────────────────────────────────────────
-        print("[CurriculumCLI] Fetching modules, audience profile...")
-        modules = await db.get_modules_with_lessons(training_id)
-        audience = await db.get_audience_profile(training_id)
+        print("[CurriculumCLI] Fetching context from training specification...")
+        if scratch:
+            print("[CurriculumCLI] --scratch enabled: ignoring existing modules, designing completely from owner specification.")
+            modules = []
+        else:
+            modules = await db.get_modules_with_lessons(training_id)
+            print(f"[CurriculumCLI] Loaded {len(modules)} baseline modules")
 
-        print(f"[CurriculumCLI] Loaded {len(modules)} modules")
+        audience = await db.get_audience_profile(training_id)
         print(f"[CurriculumCLI] Learner level: {audience.get('learner_level', 'N/A')}")
 
         # ── Generate ──────────────────────────────────────────────────────
         print("[CurriculumCLI] Calling Gemma via OpenRouter... (may take 60–120s)")
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc)
 
         curriculum, report = await generate_curriculum(
             training_id=training_id,
@@ -83,7 +88,7 @@ async def main(training_id: str, output_file: str | None, force: bool) -> None:
             audience=audience,
         )
 
-        elapsed = (datetime.utcnow() - start).total_seconds()
+        elapsed = (datetime.now(timezone.utc) - start).total_seconds()
         print(f"[CurriculumCLI] Generated in {elapsed:.1f}s")
 
         # ── Validation report ─────────────────────────────────────────────
@@ -145,7 +150,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--force", "-f",
         action="store_true",
+        default=False,
         help="Force regeneration even if a cached curriculum exists"
     )
+    parser.add_argument(
+        "--scratch", "-s",
+        action="store_true",
+        default=False,
+        help="Generate from scratch ignoring any existing modules in the DB"
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.training_id, args.out, args.force))
+    asyncio.run(main(args.training_id, args.out, args.force, args.scratch))

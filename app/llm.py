@@ -26,7 +26,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GEMMA_MODEL = os.getenv("GEMMA_MODEL", "google/gemma-4-31b-it:free")
 
 # Timeout: curriculum generation prompts require large outputs
-DEFAULT_TIMEOUT_SECONDS = 180.0
+DEFAULT_TIMEOUT_SECONDS = 300.0
 
 
 class LLMError(Exception):
@@ -73,17 +73,23 @@ async def call_gemma(
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
+    api_key = os.getenv("OPENROUTER_API_KEY") or OPENROUTER_API_KEY
+    model = os.getenv("GEMMA_MODEL") or GEMMA_MODEL
+
     payload: dict = {
-        "model": GEMMA_MODEL,
+        "model": model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    # For models with thinking/reasoning modes, set effort to none to dedicate 100% tokens to JSON content
+    if any(k in model.lower() for k in ["nemotron", "qwen", "liquid"]):
+        payload["reasoning"] = {"effort": "none"}
     if response_format:
         payload["response_format"] = response_format
 
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "http://localhost:8000",
         "X-Title": "TSP AI Service",
@@ -110,7 +116,8 @@ async def call_gemma(
             status = e.response.status_code
             if status == 429 and attempt < max_attempts:
                 wait = 10 * (2 ** (attempt - 1))
-                print(f"[LLM] Rate limited (429), retrying in {wait}s (attempt {attempt}/{max_attempts})")
+                err_detail = e.response.text[:120].replace('\n', ' ')
+                print(f"[LLM] Rate limited (429: {err_detail}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
                 await _asyncio.sleep(wait)
                 continue
             if status == 402 and attempt < max_attempts:

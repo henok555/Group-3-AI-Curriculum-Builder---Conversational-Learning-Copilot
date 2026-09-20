@@ -605,20 +605,56 @@ def _normalize_llm_output(data: dict) -> dict:
                 lesson["objective"] = lesson.get("description", "")
 
         # Assignments
+        valid_asgn_types = {"individual", "group", "practical", "written", "presentation"}
         for asgn in mod.get("assignments", []):
             if "description" not in asgn:
                 asgn["description"] = asgn.get("title", "Assignment")
             if "estimated_hours" not in asgn:
                 asgn["estimated_hours"] = 2.0
+            asgn_t = str(asgn.get("type", "individual")).lower().strip()
+            if asgn_t not in valid_asgn_types:
+                if any(k in asgn_t for k in ["group", "team", "peer"]):
+                    asgn["type"] = "group"
+                elif any(k in asgn_t for k in ["practic", "lab", "code", "hands"]):
+                    asgn["type"] = "practical"
+                elif any(k in asgn_t for k in ["writ", "essay", "report", "doc"]):
+                    asgn["type"] = "written"
+                elif any(k in asgn_t for k in ["pres", "pitch", "demo"]):
+                    asgn["type"] = "presentation"
+                else:
+                    asgn["type"] = "individual"
+            else:
+                asgn["type"] = asgn_t
 
         # Assessments
+        valid_asmt_types = {"quiz", "exam", "project", "portfolio", "presentation", "practical"}
         for asmt in mod.get("assessments", []):
             if "description" not in asmt:
                 asmt["description"] = asmt.get("title", "Assessment")
             if "questions" not in asmt:
                 asmt["questions"] = []
-            if "duration_minutes" not in asmt:
+            if "duration_minutes" not in asmt or not isinstance(asmt.get("duration_minutes"), (int, float)) or asmt["duration_minutes"] <= 0:
                 asmt["duration_minutes"] = 30
+            else:
+                asmt["duration_minutes"] = int(asmt["duration_minutes"])
+            asmt_t = str(asmt.get("type", "quiz")).lower().strip()
+            if asmt_t not in valid_asmt_types:
+                if any(k in asmt_t for k in ["practic", "lab", "hands"]):
+                    asmt["type"] = "practical"
+                elif "quiz" in asmt_t:
+                    asmt["type"] = "quiz"
+                elif any(k in asmt_t for k in ["exam", "test", "midterm", "final"]):
+                    asmt["type"] = "exam"
+                elif any(k in asmt_t for k in ["proj", "capstone"]):
+                    asmt["type"] = "project"
+                elif "port" in asmt_t:
+                    asmt["type"] = "portfolio"
+                elif any(k in asmt_t for k in ["pres", "demo", "pitch"]):
+                    asmt["type"] = "presentation"
+                else:
+                    asmt["type"] = "practical"
+            else:
+                asmt["type"] = asmt_t
 
     return data
 
