@@ -26,10 +26,28 @@ def client():
         yield test_client
 
 
+def is_db_connected() -> bool:
+    """Check if live database is reachable."""
+    try:
+        async def check():
+            async with TSPClient() as db:
+                if db._pool is None:
+                    return False
+                async with db._pool.acquire() as conn:
+                    return await conn.fetchval("SELECT 1") == 1
+        return asyncio.run(check())
+    except Exception:
+        return False
+
+
+DB_AVAILABLE = is_db_connected()
+
+
 # ---------------------------------------------------------------------------
 # 1. Health endpoint
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(not DB_AVAILABLE, reason="PostgreSQL database 'training_solutions' not reachable")
 def test_health_endpoint(client):
     """GET /health returns DB, LLM, and embedder status."""
     response = client.get("/health")
@@ -71,6 +89,7 @@ def test_copilot_rephrased_injection_layer2_blocked():
     asyncio.run(run())
 
 
+@pytest.mark.skipif(not DB_AVAILABLE, reason="PostgreSQL database 'training_solutions' not reachable")
 def test_copilot_prompt_injection_blocked(client):
     """POST /copilot/message blocks Layer 1 injection attempts."""
     payload = {
@@ -88,6 +107,7 @@ def test_copilot_prompt_injection_blocked(client):
 # 3. Copilot endpoint
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(not DB_AVAILABLE, reason="PostgreSQL database 'training_solutions' not reachable")
 def test_copilot_no_content_fallback(client):
     """Returns explicit fallback when no RAG chunks match."""
     payload = {
@@ -102,6 +122,7 @@ def test_copilot_no_content_fallback(client):
     assert "embedder" in data
 
 
+@pytest.mark.skipif(not DB_AVAILABLE, reason="PostgreSQL database 'training_solutions' not reachable")
 def test_copilot_unauthorized_cross_training(client):
     """Learner enrolled in Training A cannot access Training B via copilot."""
     payload = {
@@ -119,6 +140,7 @@ def test_copilot_unauthorized_cross_training(client):
     )
 
 
+@pytest.mark.skipif(not DB_AVAILABLE, reason="PostgreSQL database 'training_solutions' not reachable")
 def test_copilot_malformed_request(client):
     """Malformed requests return 422 Unprocessable Entity."""
     # Missing question
@@ -134,6 +156,7 @@ def test_copilot_malformed_request(client):
 # 4. TSPClient idempotency
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(not DB_AVAILABLE, reason="PostgreSQL database 'training_solutions' not reachable")
 def test_save_generated_curriculum_idempotency():
     """Identical curriculum payloads return same DB id without inserting duplicate rows."""
     async def run():
