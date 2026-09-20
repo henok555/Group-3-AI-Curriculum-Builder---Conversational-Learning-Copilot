@@ -10,17 +10,24 @@ Endpoints:
 
 import json
 import re
+import uuid
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.responses import Response
 
 from app.tsp_client import TSPClient, get_tsp_client, close_tsp_client
+from app.docx_exporter import generate_curriculum_docx
 from app.schemas import (
     # Request / response API models
-    CurriculumRequest, GeneratedCurriculum, CurriculumValidationReport,
+    CurriculumRequest, CustomCurriculumRequest, GeneratedCurriculum, CurriculumValidationReport,
     CurriculumRegenerateRequest, CurriculumHistoryEntry,
+    DraftEnhanceRequest, DraftEnhanceResponse,
     CopilotRequest, CopilotResponse, SourceAttribution, HealthResponse,
     # TSP source models (used for type hints in prompt building)
     LearnerProfile,
@@ -35,7 +42,9 @@ from app.curriculum_builder import (
     validate_and_fix_curriculum,
     build_curriculum_prompt,
     CURRICULUM_SYSTEM_PROMPT,
+    enhance_course_draft,
 )
+
 
 
 # ==================== Guardrails ====================
@@ -314,12 +323,17 @@ def validate_and_fix_curriculum(curriculum_data: dict) -> tuple[dict, Curriculum
 async def lifespan(app: FastAPI):
     # Startup
     await get_tsp_client()
-    # Test LLM connection
-    llm_ok = await test_gemma_connection()
-    print(f"LLM connection: {'OK' if llm_ok else 'FAILED'}")
+    # Test LLM connection without blocking startup
+    import asyncio as _asyncio
+    try:
+        llm_ok = await _asyncio.wait_for(test_gemma_connection(), timeout=3.0)
+        print(f"LLM connection: {'OK' if llm_ok else 'FAILED'}")
+    except Exception as e:
+        print(f"LLM connection check skipped or timed out: {e}")
     yield
     # Shutdown
     await close_tsp_client()
+
 
 
 app = FastAPI(
@@ -416,6 +430,144 @@ async def generate_curriculum(
         print(f"[Warning] Failed to persist curriculum: {e}")
 
     return GeneratedCurriculum(**curriculum_dict)
+
+
+@app.post("/curriculum/generate-custom", response_model=GeneratedCurriculum)
+async def generate_custom_curriculum(
+    request: CustomCurriculumRequest,
+    tsp_client: TSPClient = Depends(get_tsp_client),
+):
+    """
+    Generate a complete, structured curriculum from scratch using custom input specifications
+    without requiring an existing record in the TSP database.
+    """
+    custom_id = str(uuid.uuid4())
+
+    training_profile = {
+        "training": {
+            "id": custom_id,
+            "title": request.title,
+            "company_name": request.company_name,
+            "industry_type": request.industry_type,
+            "business_type": "Enterprise",
+            "rationale": request.rationale,
+            "scope": request.scope,
+            "delivery_method": request.delivery_method,
+            "duration": request.duration_hours,
+            "duration_type": "HOURS",
+            "total_participants": "15–30",
+        },
+        "objectives": [
+            {"id": str(uuid.uuid4()), "definition": obj} for obj in request.specific_objectives
+        ],
+        "keywords": [w.strip() for w in request.scope.split(",") if w.strip()],
+        "purposes": [request.rationale],
+        "resource_links": request.resource_links,
+    }
+
+    audience = {
+        "learner_level": request.learner_level,
+        "learner_level_desc": f"{request.learner_level} professional competency",
+        "education_level": request.education_level,
+        "education_level_desc": request.education_level,
+        "language_name": request.language,
+        "language_code": "en",
+        "work_experience": "Full-Time Professional",
+        "work_experience_desc": "Workplace experience in relevant domain",
+        "specific_courses": [],
+        "specific_prerequisites": request.prerequisites,
+    }
+
+    try:
+        curriculum, validation_report = await _generate_curriculum(
+            training_id=custom_id,
+            training_profile=training_profile,
+            modules=[],
+            audience=audience,
+        )
+    except LLMError as e:
+        raise HTTPException(500, f"LLM generation failed: {e}")
+
+    curriculum_dict = curriculum.model_dump(mode="json")
+    curriculum_dict["validation_report"] = validation_report.model_dump()
+    curriculum_dict.setdefault("metadata", {}).update({
+        "ai_response_id": custom_id,
+        "from_cache": False,
+        "mode": "custom_scratch",
+    })
+
+    # Persist custom training metadata & curriculum to DB
+    try:
+        await tsp_client.save_custom_training(
+            training_id=custom_id,
+            title=request.title,
+            rationale=request.rationale,
+            scope=request.scope,
+            duration_hours=float(request.duration_hours),
+            delivery_method=request.delivery_method or "BLENDED",
+        )
+        db_id = await tsp_client.save_generated_curriculum(custom_id, curriculum_dict)
+        curriculum_dict["metadata"]["curriculum_db_id"] = db_id
+    except Exception as e:
+        print(f"[Warning] Failed to persist custom curriculum: {e}")
+
+    return GeneratedCurriculum(**curriculum_dict)
+
+
+@app.get("/curriculum/recent")
+async def get_recent_curricula_endpoint(
+    limit: int = 25,
+    tsp_client: TSPClient = Depends(get_tsp_client),
+):
+    """Retrieve all recent generated curricula across the system."""
+    try:
+        return await tsp_client.get_all_recent_curricula(limit=limit)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch recent curricula: {e}")
+
+
+@app.get("/curriculum/version/{curriculum_db_id}", response_model=GeneratedCurriculum)
+async def get_curriculum_version_endpoint(
+    curriculum_db_id: str,
+    tsp_client: TSPClient = Depends(get_tsp_client),
+):
+    """Retrieve a specific saved curriculum by its ai_generated_curricula database ID."""
+    curriculum_data = await tsp_client.get_curriculum_by_db_id(curriculum_db_id)
+    if not curriculum_data:
+        raise HTTPException(404, f"Curriculum version {curriculum_db_id} not found")
+    return GeneratedCurriculum(**curriculum_data)
+
+
+@app.post("/curriculum/enhance-draft", response_model=DraftEnhanceResponse)
+async def enhance_draft_endpoint(request: DraftEnhanceRequest):
+    """AI assistant to refine and expand course draft specifications."""
+    try:
+        enhanced = await enhance_course_draft(request.model_dump())
+        return DraftEnhanceResponse(**enhanced)
+    except LLMError as e:
+        status_code = 429 if ("quota" in str(e).lower() or "limit" in str(e).lower()) else 500
+        raise HTTPException(status_code, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Draft enhancement failed: {e}")
+
+
+
+
+@app.post("/curriculum/export-docx")
+async def export_curriculum_docx_endpoint(curriculum_data: Dict[str, Any]):
+    """Export a curriculum object as a publication-ready Word (.docx) document."""
+    try:
+        docx_bytes = generate_curriculum_docx(curriculum_data, save_to_disk=True)
+        title = curriculum_data.get("training_title", "Curriculum").replace(" ", "_")
+        return Response(
+            content=docx_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{title}.docx"'}
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to export docx: {e}")
+
+
 
 
 @app.get("/curriculum/{training_id}/latest", response_model=GeneratedCurriculum)

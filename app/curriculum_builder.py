@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import urllib.parse
 from datetime import datetime
 from typing import Optional
 
@@ -62,73 +63,157 @@ LEARNER_LEVEL_TO_BLOOM: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 CURRICULUM_SYSTEM_PROMPT = """\
-You are an expert curriculum designer applying Bloom's Taxonomy and constructive alignment.
-Generate a pedagogically sound, structured curriculum for the TSP (Training Solution Platform).
+CRITICAL: You must output ONLY a valid JSON object.
+DO NOT output any pre-amble, scratchpad, drafting, reasoning, or text explanations.
+Your response MUST start immediately with the character '{' on line 1.
+
+You are a senior curriculum architect with expertise in Bloom's Taxonomy, constructive alignment, and adult learning theory.
+Your task is to produce a rich, deployment-ready curriculum for the TSP (Training Solution Platform).
 
 ## Pedagogical Principles
-- Constructive alignment: objectives → teaching activities → assessments must all align
-- Write lesson objectives using action verbs from the target Bloom's cognitive level
-- Scaffold learning: each module builds on knowledge from the previous one
-- Vary instructional methods across modules (lecture, discussion, practical, case study)
+- Constructive alignment: lesson objectives → teaching activities → assignments → assessments must all align
+- Every lesson objective MUST start with a precise Bloom's action verb from the instructed cognitive level
+- LESSON OBJECTIVE vs DESCRIPTION RULE:
+    * objective: a single sentence starting with a Bloom's action verb (e.g. "Differentiate X from Y")
+    * description: 2–3 sentences giving learning context, scenario, and what participants will explore — NEVER copy the objective verbatim
+- Scaffold learning: each module explicitly builds on knowledge from the previous module
+- Vary instructional methods per lesson: choose from [Lecture, Demonstration, Discussion-Based, Case Study, Practical, Role Play, Simulation, Peer Review]
+- Vary assignment types across modules: choose from [individual, group, practical, written, presentation, portfolio]
 
 ## Structural Requirements
-- Minimum 3 modules, each with 2–4 lessons
+- 3–5 modules, each with 2–4 lessons
 - Each module MUST have: at least 1 assignment, 1 assessment, and 1 rubric
-- Each rubric MUST have EXACTLY 3 criteria; weights must sum to 1.0 (use 0.33, 0.33, 0.34)
-- Each rubric criterion MUST include 4 performance levels keyed "4", "3", "2", "1"
+- Each rubric MUST have EXACTLY 3 criteria; weights [0.33, 0.33, 0.34]
+- Each rubric criterion MUST include 4 performance levels keyed "4", "3", "2", "1" with specific descriptors
+- RUBRIC SPECIFICITY RULE: All 3 criteria MUST be domain-specific to the module topic. NO generic criteria like "Clarity and Coherence" unless it is the 3rd criterion. Criteria 1 and 2 must evaluate technical/operational competencies directly related to the module.
+- RUBRIC LINKING RULE: Each assignment's rubric_id MUST reference its module's rubric id (e.g. assignment rubric_id = "rub-1" when module rubric id is "rub-1")
+- ASSESSMENT QUESTIONS RULE: Every assessment MUST include 3–5 questions. Each question must have: id, question (text), type ("multiple_choice" | "short_answer" | "scenario"), points (integer), and for multiple_choice: options (list of 4 strings) and correct_answer (string)
+- DIFFERENTIATION RULE: Every module MUST populate differentiation_strategies (e.g. scaffolding for less experienced, extension tasks for advanced, visual aids for different learning styles)
+- INSTRUCTIONAL METHODS RULE: Every lesson MUST list at least 1 instructional method
 - All IDs must be unique strings (format: "mod-1", "les-1-1", "asgn-1", "asmt-1", "rub-1", "crit-1-1")
 - Use ONLY information from the provided training profile — do not invent facts
+
+## Duration Rules
+- Lesson durations must be realistic: 0.5–2.0 HOURS each. Never output > 8 HOURS for a single lesson.
+- Module duration = sum of its lesson durations. Never output module duration > 24 HOURS.
 
 ## Required JSON Fields
 The top-level object must include:
   - training_id (string UUID)
   - training_title (string)
   - modules (array, min 3)
-  - audience_profile_summary (object)
+  - audience_profile_summary (object with keys: education_level, language, learner_level, work_experience, participants, delivery_mode)
   - objectives_mapping (object: objective_id → [module_id, ...])
 
-## Few-Shot Rubric Example
+## Few-Shot Example: Module with all required fields
 ```json
 {
-  "id": "rub-1",
-  "title": "Module 1 Assignment Rubric",
-  "description": "Evaluates quality of practical demonstration",
-  "criteria": [
+  "id": "mod-1",
+  "name": "Example Module",
+  "description": "Participants examine the operational structure of the platform and deconstruct how user roles interact with core system workflows.",
+  "key_concepts": "Role-based access, workflow orchestration, audit trail, case escalation",
+  "teaching_strategy": "Scenario-based learning with live system demonstration and guided Q&A",
+  "differentiation_strategies": "Scaffolding: provide step-by-step role guides for less experienced learners. Extension: challenge advanced learners to map edge-case escalation paths.",
+  "inclusion_strategy": "Use visual role-interaction diagrams and bilingual glossary cards for diverse literacy levels.",
+  "duration": 3.0,
+  "duration_type": "HOURS",
+  "module_order": 1,
+  "objective_ids": ["<uuid-from-objectives-list>"],
+  "instructional_methods": ["Demonstration", "Discussion-Based"],
+  "lessons": [
     {
-      "criterion": "Content Accuracy",
-      "description": "Correctness of information presented",
-      "weight": 0.33,
-      "levels": {
-        "4": "All content is accurate, fully supported by training materials",
-        "3": "Most content is accurate with minor errors",
-        "2": "Some inaccuracies that affect understanding",
-        "1": "Significant inaccuracies throughout"
-      }
-    },
-    {
-      "criterion": "Practical Application",
-      "description": "Ability to apply concepts to real-world scenarios",
-      "weight": 0.33,
-      "levels": {
-        "4": "Demonstrates clear, creative real-world application",
-        "3": "Applies concepts correctly in most cases",
-        "2": "Limited application with prompting needed",
-        "1": "Unable to apply concepts without significant support"
-      }
-    },
-    {
-      "criterion": "Communication",
-      "description": "Clarity and professionalism of presentation",
-      "weight": 0.34,
-      "levels": {
-        "4": "Exceptionally clear, professional, and well-structured",
-        "3": "Clear and organised with minor issues",
-        "2": "Somewhat unclear or disorganised",
-        "1": "Difficult to understand; lacks structure"
-      }
+      "id": "les-1-1",
+      "name": "Platform Overview",
+      "description": "Learners explore the platform dashboard, examining how the system is structured to support multiple user roles. They trace a sample customer case from submission to resolution.",
+      "objective": "Deconstruct the platform's user-role structure and attribute each role's responsibilities within a standard case lifecycle.",
+      "bloom_level": "Analyze",
+      "duration": 1.5,
+      "duration_type": "HOURS",
+      "instructional_methods": ["Demonstration", "Discussion-Based"],
+      "content_references": []
     }
   ],
-  "total_weight": 1.0
+  "assignments": [
+    {
+      "id": "asgn-1",
+      "title": "Role-Workflow Mapping Exercise",
+      "description": "Participants map all user roles to their corresponding system actions in a given scenario, highlighting decision points and escalation triggers.",
+      "type": "written",
+      "estimated_hours": 1.5,
+      "rubric_id": "rub-1"
+    }
+  ],
+  "assessments": [
+    {
+      "id": "asmt-1",
+      "title": "Module 1 Knowledge Check",
+      "description": "Tests comprehension of platform structure, user roles, and case workflows.",
+      "type": "quiz",
+      "duration_minutes": 20,
+      "max_attempts": 2,
+      "passing_score": 70.0,
+      "rubric_id": "rub-1",
+      "questions": [
+        {
+          "id": "q-1-1",
+          "question": "Which user role is responsible for escalating unresolved cases?",
+          "type": "multiple_choice",
+          "points": 10,
+          "options": ["Customer", "Agent", "Supervisor", "System"],
+          "correct_answer": "Supervisor"
+        },
+        {
+          "id": "q-1-2",
+          "question": "Describe the steps the system follows when a dispute is flagged by a customer.",
+          "type": "scenario",
+          "points": 20
+        }
+      ]
+    }
+  ],
+  "rubrics": [
+    {
+      "id": "rub-1",
+      "title": "Role-Workflow Mapping Rubric",
+      "description": "Evaluates accuracy of role mapping and workflow analysis",
+      "criteria": [
+        {
+          "criterion": "Role-Action Accuracy",
+          "description": "Correctness of mapping each user role to its system actions",
+          "weight": 0.33,
+          "levels": {
+            "4": "All roles accurately mapped with all system actions identified",
+            "3": "Most roles correctly mapped with minor omissions",
+            "2": "Some roles mapped but key actions missing",
+            "1": "Role-action mapping is largely inaccurate or missing"
+          }
+        },
+        {
+          "criterion": "Escalation & Decision Point Identification",
+          "description": "Ability to identify decision points and escalation triggers in the workflow",
+          "weight": 0.33,
+          "levels": {
+            "4": "All decision points and escalation triggers correctly identified with justification",
+            "3": "Most decision points identified; minor gaps in escalation paths",
+            "2": "Some decision points noted but escalation logic is incomplete",
+            "1": "Fails to identify key decision points or escalation triggers"
+          }
+        },
+        {
+          "criterion": "Clarity and Structure",
+          "description": "Coherence and professional presentation of the workflow map",
+          "weight": 0.34,
+          "levels": {
+            "4": "Exceptionally clear, professionally structured, and easy to follow",
+            "3": "Clear and organised with minor presentation issues",
+            "2": "Somewhat unclear or disorganised in structure",
+            "1": "Difficult to follow; lacks logical structure"
+          }
+        }
+      ],
+      "total_weight": 1.0
+    }
+  ]
 }
 ```
 
@@ -159,42 +244,64 @@ def _flatten_objectives(objectives: list) -> list[dict]:
     return flat
 
 
+def _to_hours(value: float, duration_type: str) -> float:
+    """Convert DB duration value to hours for prompt display."""
+    dt = (duration_type or "HOURS").upper()
+    if dt == "MINUTES":
+        return round(value / 60, 2)
+    if dt == "DAYS":
+        return round(value * 8, 2)  # treat 1 day = 8 hours
+    return value  # already hours
+
+
 def _format_module_block(module: dict, fallback_order: int = 0) -> str:
     """Format one TSP module + its lessons and content into a prompt block."""
-    # module_order is NULL for some records — fallback to row position
     order = module.get("module_order") or fallback_order
+
+    raw_dur = module.get('duration', '?')
+    raw_type = module.get('duration_type', 'HOURS')
+    if isinstance(raw_dur, (int, float)):
+        display_dur = f"{_to_hours(raw_dur, raw_type)} HOURS"
+    else:
+        display_dur = f"{raw_dur} {raw_type}"
 
     lines = [
         f"MODULE {order}: {module.get('name', 'Unnamed')}",
         f"  Description: {module.get('description', 'N/A')}",
         f"  Key concepts: {module.get('key_concepts', 'N/A')}",
-        f"  Duration: {module.get('duration', '?')} {module.get('duration_type', 'HOURS')}",
+        f"  Duration: {display_dur}",
         f"  Teaching strategy: {module.get('teaching_strategy', 'N/A')}",
         f"  Instructional methods: {', '.join(im['name'] for im in module.get('instructional_methods', [])) or 'N/A'}",
-        f"  Assessment types: {', '.join(module.get('assessment_types', [])) or 'N/A'}",
         f"  Primary materials: {module.get('primary_materials', 'N/A')}",
         f"  Secondary materials: {module.get('secondary_materials', 'N/A')}",
         f"  Digital tools: {module.get('digital_tools', 'N/A')}",
         f"  Differentiation strategies: {module.get('differentiation_strategies', 'N/A')}",
         f"  Inclusion strategy: {module.get('inclusion_strategy', 'N/A')}",
-        f"  Technology integration: {module.get('technology_integration_description', 'N/A')}",
     ]
 
     for lesson in module.get("lessons", []):
         methods = [im["name"] for im in lesson.get("instructional_methods", [])]
+        lesson_dur = lesson.get('duration', '?')
+        lesson_type = lesson.get('duration_type', 'HOURS')
+        if isinstance(lesson_dur, (int, float)):
+            lesson_display = f"{_to_hours(lesson_dur, lesson_type)} HOURS"
+        else:
+            lesson_display = f"{lesson_dur} {lesson_type}"
         lines += [
             f"  LESSON: {lesson.get('name', 'Unnamed')}",
-            f"    Duration: {lesson.get('duration', '?')} {lesson.get('duration_type', 'HOURS')}",
+            f"    Duration: {lesson_display}",
             f"    Objective: {lesson.get('objective', 'N/A')}",
             f"    Methods: {', '.join(methods) or 'N/A'}",
         ]
 
     for content in module.get("accepted_contents", []):
         desc = content.get("description", "")
+        link_val = content.get("link") or content.get("reference_link") or ""
+        link_str = f" | Link/Video: {link_val}" if link_val else ""
         lines.append(
             f"  CONTENT [{content['id']}]: {content.get('name', 'Unnamed')} "
             f"({content.get('file_type', '?')}, level={content.get('level', '?')}, "
-            f"{content.get('time_to_read_minutes', '?')} min read)"
+            f"{content.get('time_to_read_minutes', '?')} min read){link_str}"
         )
         if desc:
             lines.append(f"    → {desc[:180]}")
@@ -257,8 +364,23 @@ def build_curriculum_prompt(
     # Objective IDs for mapping instructions
     obj_ids_sample = ", ".join(f'"{o["id"]}"' for o in all_objectives[:8]) if all_objectives else '"obj-1", "obj-2"'
 
+    # Compute total training hours budget for duration guidance
+    raw_duration = training.get('duration', 0) or 0
+    raw_dur_type = training.get('duration_type', 'HOURS')
+    total_hours = _to_hours(float(raw_duration), raw_dur_type) if raw_duration else 0
+    lesson_budget_hint = (
+        f"Total training duration: {total_hours:.1f} hours. "
+        f"Distribute lesson durations proportionally so all lesson durations sum to approximately {total_hours:.1f} hours. "
+        f"Each lesson must be 0.5–2.0 HOURS. Never assign > 8 HOURS to a single lesson."
+        if total_hours > 0 else
+        "Each lesson must be 0.5–2.0 HOURS. Module duration = sum of lesson durations."
+    )
+
+    delivery = training.get('delivery_method', 'N/A') or 'N/A'
+    n_participants = training.get('total_participants', 'N/A')
+
     return f"""\
-Generate a complete, pedagogically sound curriculum for the following TSP training.
+Generate a complete, deployment-ready curriculum for the following TSP training.
 
 ═══════════════════════════════════════════════
 TRAINING OVERVIEW
@@ -269,9 +391,9 @@ Organization:  {training.get('company_name', 'N/A')}
 Industry:      {training.get('industry_type', 'N/A')} ({training.get('business_type', 'N/A')})
 Rationale:     {training.get('rationale', 'N/A')}
 Scope:         {training.get('scope', 'N/A')}
-Delivery:      {training.get('delivery_method', 'N/A')}
-Duration:      {training.get('duration', '?')} {training.get('duration_type', 'HOURS')}
-Participants:  {training.get('total_participants', 'N/A')}
+Delivery mode: {delivery}
+Duration:      {raw_duration} {raw_dur_type} (= {total_hours:.1f} HOURS total)
+Participants:  {n_participants}
 Keywords:      {', '.join(training_profile.get('keywords', [])) or 'N/A'}
 Purposes:      {', '.join(training_profile.get('purposes', [])) or 'N/A'}
 
@@ -280,8 +402,8 @@ AUDIENCE PROFILE
 ═══════════════════════════════════════════════
 {audience_block}
 
-Bloom's guidance: ALL lesson objectives must use action verbs from the "{bloom_target}" level.
-Example verbs: {bloom_verbs}
+Bloom's cognitive target: "{bloom_target}"
+Required action verbs for ALL lesson objectives: {bloom_verbs}
 
 ═══════════════════════════════════════════════
 TRAINING OBJECTIVES  (use these IDs in objectives_mapping and module.objective_ids)
@@ -290,29 +412,41 @@ TRAINING OBJECTIVES  (use these IDs in objectives_mapping and module.objective_i
 
 ═══════════════════════════════════════════════
 TSP MODULES AND ACCEPTED CONTENT
-(If modules exist below, use their description, key concepts, teaching strategy, and lessons as foundation.
-Enrich existing content without discarding it. If no modules are defined yet, generate 3–5 modules derived
-directly from the title, rationale, and scope above.)
+(If modules exist below, use them as the structural foundation — enrich don't discard.
+If no modules are defined yet, derive 3–5 modules from the training scope and rationale.)
 ═══════════════════════════════════════════════
 {modules_block}
 
 ═══════════════════════════════════════════════
 GENERATION INSTRUCTIONS
 ═══════════════════════════════════════════════
-1.  Create 3–5 modules — use existing TSP module structure if provided, or construct from title/scope if empty
-2.  Each module: 2–4 lessons, each with a Bloom's-aligned objective and bloom_level field
-3.  Each module: exactly 1 assignment (type: individual | group | practical | written | presentation)
-4.  Each module: exactly 1 assessment (type: quiz | exam | project | portfolio | presentation | practical)
-5.  Each module: exactly 1 rubric with EXACTLY 3 criteria, weights [0.33, 0.33, 0.34]
-6.  Fill module.objective_ids with objective IDs from the list above (or generated objective IDs if none were predefined)
-7.  Fill top-level objectives_mapping: {{ "objective_id": ["mod-id", ...] }}
-8.  Reference accepted content IDs in lesson.content_references where relevant
-9.  Set duration_type to "HOURS" throughout (matches TSP DB convention)
-10. Adapt language and depth to {learner_level} learners
-11. Do NOT invent facts — only use information from the training data above
-12. Set training_id to: "{training_id}"
+TOKEN BUDGET: Output must fit in 7500 tokens. Be precise and concise: 1 sentence per description, no padding.
 
-Available objective IDs for mapping: [{obj_ids_sample}]
+DURATION: {lesson_budget_hint}
+
+1.  Create 3–5 modules aligned to the TSP module structure above
+2.  Each module: 2–3 lessons — lesson objective MUST start with a Bloom's verb from "{bloom_target}" level
+    - lesson.description: 1–2 sentences of context (NEVER identical to objective)
+    - lesson.objective: one Bloom's verb sentence
+    - lesson.instructional_methods: REQUIRED — at least 1 method
+3.  Each module: exactly 1 assignment — set assignment.rubric_id = that module's rubric id
+4.  Each module: exactly 1 assessment
+    - Include exactly 2–3 questions. Mix types: multiple_choice, short_answer, scenario
+    - multiple_choice: must include options (4 strings) and correct_answer
+5.  Each module: exactly 1 rubric, EXACTLY 3 criteria, weights [0.33, 0.33, 0.34]
+    - Criteria 1 & 2 MUST be domain-specific technical competencies for this module
+    - Criterion 3 may be communication/presentation quality
+6.  Every module MUST have a non-empty differentiation_strategies (scaffolding + extension, 1 sentence each)
+7.  Fill module.objective_ids with objective IDs from the list above
+8.  Fill top-level objectives_mapping: {{ "objective_id": ["mod-id", ...] }}
+9.  Reference accepted content IDs in lesson.content_references where relevant
+10. Set duration_type to "HOURS" throughout
+11. Adapt language and examples to {learner_level} learners at {training.get('company_name', 'the organization')}
+12. Do NOT invent facts — only use information from the training data above
+13. Set training_id to: "{training_id}"
+14. audience_profile_summary: education_level, language, learner_level, work_experience, participants, delivery_mode
+
+Available objective IDs: [{obj_ids_sample}]
 
 Output the complete JSON curriculum now.\
 """
@@ -474,26 +608,65 @@ def _normalize_llm_output(data: dict) -> dict:
                 lesson["objective"] = lesson.get("description", "")
 
         # Assignments
+        valid_asgn_types = {"individual", "group", "practical", "written", "presentation"}
         for asgn in mod.get("assignments", []):
             if "description" not in asgn:
                 asgn["description"] = asgn.get("title", "Assignment")
             if "estimated_hours" not in asgn:
                 asgn["estimated_hours"] = 2.0
+            asgn_t = str(asgn.get("type", "individual")).lower().strip()
+            if asgn_t not in valid_asgn_types:
+                if any(k in asgn_t for k in ["group", "team", "peer"]):
+                    asgn["type"] = "group"
+                elif any(k in asgn_t for k in ["practic", "lab", "code", "hands"]):
+                    asgn["type"] = "practical"
+                elif any(k in asgn_t for k in ["writ", "essay", "report", "doc"]):
+                    asgn["type"] = "written"
+                elif any(k in asgn_t for k in ["pres", "pitch", "demo"]):
+                    asgn["type"] = "presentation"
+                else:
+                    asgn["type"] = "individual"
+            else:
+                asgn["type"] = asgn_t
 
         # Assessments
+        valid_asmt_types = {"quiz", "exam", "project", "portfolio", "presentation", "practical"}
         for asmt in mod.get("assessments", []):
             if "description" not in asmt:
                 asmt["description"] = asmt.get("title", "Assessment")
             if "questions" not in asmt:
                 asmt["questions"] = []
-            if "duration_minutes" not in asmt:
+            if "duration_minutes" not in asmt or not isinstance(asmt.get("duration_minutes"), (int, float)) or asmt["duration_minutes"] <= 0:
                 asmt["duration_minutes"] = 30
+            else:
+                asmt["duration_minutes"] = int(asmt["duration_minutes"])
+            asmt_t = str(asmt.get("type", "quiz")).lower().strip()
+            if asmt_t not in valid_asmt_types:
+                if any(k in asmt_t for k in ["practic", "lab", "hands"]):
+                    asmt["type"] = "practical"
+                elif "quiz" in asmt_t:
+                    asmt["type"] = "quiz"
+                elif any(k in asmt_t for k in ["exam", "test", "midterm", "final"]):
+                    asmt["type"] = "exam"
+                elif any(k in asmt_t for k in ["proj", "capstone"]):
+                    asmt["type"] = "project"
+                elif "port" in asmt_t:
+                    asmt["type"] = "portfolio"
+                elif any(k in asmt_t for k in ["pres", "demo", "pitch"]):
+                    asmt["type"] = "presentation"
+                else:
+                    asmt["type"] = "practical"
+            else:
+                asmt["type"] = asmt_t
 
     return data
 
 
 def validate_and_fix_curriculum(
     curriculum_data: dict,
+    training_profile: Optional[dict] = None,
+    audience: Optional[dict] = None,
+    modules_context: Optional[list[dict]] = None,
 ) -> tuple[dict, CurriculumValidationReport]:
     """
     Post-generation validation and auto-correction pass.
@@ -505,6 +678,8 @@ def validate_and_fix_curriculum(
       3. Module completeness          (every module needs assignment + assessment + rubric)
       4. Lesson objective backfill    (empty objectives get a fallback string)
       5. objectives_mapping inference (built from module.objective_ids when map is empty)
+      6. rubric_id linkage
+      7. Media resource integration   (video links, YouTube URLs, PDFs, slides)
 
     Returns:
         (fixed_curriculum_data, CurriculumValidationReport) — report documents all changes.
@@ -567,7 +742,704 @@ def validate_and_fix_curriculum(
             curriculum_data["objectives_mapping"] = mapping
             report.objectives_mapping_inferred = True
 
+    # ── 6. Link rubric_id on assignments/assessments if missing ─────────────
+    for mod in curriculum_data.get("modules", []):
+        rubric_ids = [r.get("id") for r in mod.get("rubrics", []) if r.get("id")]
+        if rubric_ids:
+            primary = rubric_ids[0]
+            for asgn in mod.get("assignments", []):
+                if not asgn.get("rubric_id"):
+                    asgn["rubric_id"] = primary
+            for asmt in mod.get("assessments", []):
+                if not asmt.get("rubric_id"):
+                    asmt["rubric_id"] = primary
+
+    # ── 7. Clamp unrealistic lesson/module durations ─────────────────────────
+    for mod in curriculum_data.get("modules", []):
+        for lesson in mod.get("lessons", []):
+            dur = lesson.get("duration", 1.0)
+            if isinstance(dur, (int, float)) and dur > 8.0:
+                lesson["duration"] = round(dur / 60, 2) if dur > 60 else 1.0
+            lesson["duration_type"] = "HOURS"
+        # Recalculate module duration as sum of lesson durations
+        lesson_durs = [l.get("duration", 1.0) for l in mod.get("lessons", [])]
+        if lesson_durs and isinstance(lesson_durs[0], (int, float)):
+            total = round(sum(lesson_durs), 2)
+            if total > 0:
+                mod["duration"] = total
+        mod["duration_type"] = "HOURS"
+
+    # ── 8. De-duplicate lesson description == objective ──────────────────────
+    for mod in curriculum_data.get("modules", []):
+        for lesson in mod.get("lessons", []):
+            desc = (lesson.get("description") or "").strip()
+            obj = (lesson.get("objective") or "").strip()
+            if desc and obj and desc == obj:
+                # Generate a distinct context-setting description
+                lesson["description"] = (
+                    f"In this lesson, participants explore {lesson.get('name', 'this topic')} "
+                    f"through guided activities and examples drawn from the training context. "
+                    f"Learners engage with relevant scenarios and apply key concepts before "
+                    f"completing the lesson objective."
+                )
+
+    # ── 9. Ensure extended artifacts (manual doc.md & DB tables) ─────────────
+    _ensure_audience_profile(curriculum_data, audience=audience, training_profile=training_profile)
+    _ensure_training_profile(curriculum_data, training_profile=training_profile)
+    _ensure_surveys(curriculum_data, training_profile=training_profile)
+    _ensure_formal_assessments(curriculum_data, training_profile=training_profile)
+    _ensure_content_requests(curriculum_data, training_profile=training_profile)
+
+    # ── 10. Resolve and integrate media resources (videos, YouTube links, PDFs)
+    _ensure_media_resources(curriculum_data, modules_context=modules_context, training_profile=training_profile)
+
     return curriculum_data, report
+
+
+
+def _ensure_audience_profile(
+    data: dict,
+    audience: Optional[dict] = None,
+    training_profile: Optional[dict] = None,
+) -> None:
+    ap = data.get("audience_profile")
+    if not isinstance(ap, dict):
+        ap = {}
+    aud = audience or {}
+    tp = (training_profile or {}).get("training") or (training_profile or {})
+    title = tp.get("title", data.get("training_title", "Training"))
+
+    if not ap.get("learner_level"):
+        ap["learner_level"] = aud.get("learner_level", "Advanced")
+    if not ap.get("education_level"):
+        ap["education_level"] = aud.get("education_level", "Bachelor’s Degree")
+    if not ap.get("language"):
+        ap["language"] = aud.get("language_name", aud.get("language", "English"))
+    if not ap.get("work_experience"):
+        ap["work_experience"] = aud.get("work_experience", "Permanent Full-Time Job")
+    if not ap.get("certifications"):
+        ap["certifications"] = aud.get("certifications") or f"Relevant IT/operational foundation certification or equivalent experience in {title}"
+    if not ap.get("licenses"):
+        ap["licenses"] = aud.get("licenses")
+    if not ap.get("specific_courses"):
+        ap["specific_courses"] = aud.get("specific_courses") or [
+            f"Foundations of {title.split(' ')[0]} Systems",
+            "Enterprise Digital Workflow Management",
+        ]
+    if not ap.get("specific_prerequisites"):
+        ap["specific_prerequisites"] = aud.get("specific_prerequisites") or [
+            "Familiarity with enterprise software interfaces and digital operational procedures",
+            "Basic understanding of core banking / customer service lifecycle processes",
+        ]
+    data["audience_profile"] = ap
+
+
+def _ensure_training_profile(
+    data: dict,
+    training_profile: Optional[dict] = None,
+) -> None:
+    tp_out = data.get("training_profile")
+    if not isinstance(tp_out, dict):
+        tp_out = {}
+    tp = (training_profile or {}).get("training") or (training_profile or {})
+    title = tp.get("title", data.get("training_title", "Training"))
+    mods = data.get("modules", [])
+
+    if not tp_out.get("general_objectives"):
+        tp_out["general_objectives"] = [
+            f"Equip operational and technical teams with end-to-end capabilities to configure, monitor, and optimize {title}.",
+            f"Establish standard incident management, escalation, and troubleshooting protocols across enterprise service channels.",
+            f"Ensure compliance with operational governance, data security, and audit readiness standards.",
+        ]
+
+    if not tp_out.get("specific_objectives"):
+        spec_objs = []
+        for m in mods:
+            m_name = m.get("name", "Module")
+            spec_objs.append({
+                "objective": f"Deconstruct and apply the core principles, workflows, and tools of {m_name}.",
+                "outcomes": [
+                    f"Accurately diagnose and resolve standard operational scenarios within {m_name}.",
+                    f"Execute role-specific tasks and workflows adhering to quality benchmarks in {m_name}.",
+                ],
+            })
+        tp_out["specific_objectives"] = spec_objs
+
+    if not tp_out.get("learning_style_preferences"):
+        tp_out["learning_style_preferences"] = [
+            "Practical Hands-on Simulation",
+            "Visual Architecture & Workflow Mapping",
+            "Case-Based Problem Solving & Guided Q&A",
+        ]
+    data["training_profile"] = tp_out
+
+
+def _ensure_surveys(
+    data: dict,
+    training_profile: Optional[dict] = None,
+) -> None:
+    existing = data.get("surveys")
+    if isinstance(existing, list) and len(existing) >= 2:
+        for s in existing:
+            stype = str(s.get("survey_type", "OTHER")).upper()
+            s["survey_type"] = stype if stype in {"BASELINE", "ENDLINE", "OTHER"} else ("BASELINE" if "base" in stype.lower() else "ENDLINE")
+        return
+
+    tp = (training_profile or {}).get("training") or (training_profile or {})
+    title = tp.get("title", data.get("training_title", "Training"))
+
+    baseline_survey = {
+        "name": f"{title} — Baseline Diagnostic Survey",
+        "survey_type": "BASELINE",
+        "description": "Pre-training diagnostic survey to evaluate participant prior background, baseline skills, and specific learning objectives.",
+        "sections": [
+            {
+                "title": "Demographics & Current Role Context",
+                "description": "Information regarding your professional role and daily system interactions",
+                "entries": [
+                    {
+                        "question_number": 1,
+                        "question": "What best describes your primary role and responsibility in relation to this training?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "System Administrator / Technical Support"},
+                            {"choice_order": "B", "choice_text": "Customer Operations Specialist / Frontline Agent"},
+                            {"choice_order": "C", "choice_text": "Team Supervisor / Business Unit Lead"},
+                            {"choice_order": "D", "choice_text": "Product or Compliance Manager"},
+                        ],
+                    },
+                    {
+                        "question_number": 2,
+                        "question": "How frequently do you currently manage or interact with digital systems in your workflows?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Daily / Core part of my job"},
+                            {"choice_order": "B", "choice_text": "Weekly / Regular basis"},
+                            {"choice_order": "C", "choice_text": "Occasionally / As needed"},
+                            {"choice_order": "D", "choice_text": "Rarely or Never"},
+                        ],
+                    },
+                ],
+            },
+            {
+                "title": "Baseline Competency & Learning Expectations",
+                "description": "Self-assessment of prior familiarity and key goals for the course",
+                "entries": [
+                    {
+                        "question_number": 3,
+                        "question": f"How would you rate your current baseline proficiency with {title} concepts and workflows?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Novice (No prior hands-on experience)"},
+                            {"choice_order": "B", "choice_text": "Basic (Understand core terminology and high-level concepts)"},
+                            {"choice_order": "C", "choice_text": "Competent (Have performed basic operational tasks)"},
+                            {"choice_order": "D", "choice_text": "Advanced (Comfortable troubleshooting and executing workflows)"},
+                        ],
+                    },
+                    {
+                        "question_number": 4,
+                        "question": "Which areas of the training are most crucial for your day-to-day effectiveness?",
+                        "question_type": "CHECKBOX",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Architecture, system setup, and configuration"},
+                            {"choice_order": "B", "choice_text": "Standard user workflows and role-based tasks"},
+                            {"choice_order": "C", "choice_text": "Incident triage, escalation, and troubleshooting"},
+                            {"choice_order": "D", "choice_text": "Performance monitoring and quality reporting"},
+                        ],
+                    },
+                    {
+                        "question_number": 5,
+                        "question": "What specific operational challenge or bottleneck do you hope to solve through this training?",
+                        "question_type": "TEXT",
+                        "is_required": False,
+                        "is_follow_up": False,
+                        "choices": [],
+                    },
+                ],
+            },
+        ],
+    }
+
+    endline_survey = {
+        "name": f"{title} — Endline Evaluation & Impact Survey",
+        "survey_type": "ENDLINE",
+        "description": "Post-training evaluation measuring knowledge acquisition, instructional delivery quality, and workplace applicability.",
+        "sections": [
+            {
+                "title": "Competency Gains & Learning Impact",
+                "description": "Evaluate your skill progression and practical readiness after training",
+                "entries": [
+                    {
+                        "question_number": 1,
+                        "question": "To what degree did this training improve your ability to execute tasks independently?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Significantly improved my confidence and independence"},
+                            {"choice_order": "B", "choice_text": "Moderately improved my capabilities"},
+                            {"choice_order": "C", "choice_text": "Slightly improved; still require periodic guidance"},
+                            {"choice_order": "D", "choice_text": "Did not noticeably improve my performance"},
+                        ],
+                    },
+                    {
+                        "question_number": 2,
+                        "question": "How relevant were the practical scenarios and hands-on exercises to your actual work?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Extremely relevant — directly mirrored workplace challenges"},
+                            {"choice_order": "B", "choice_text": "Mostly relevant with useful practical takeaways"},
+                            {"choice_order": "C", "choice_text": "Somewhat theoretical; limited direct applicability"},
+                            {"choice_order": "D", "choice_text": "Not relevant to my current role"},
+                        ],
+                    },
+                ],
+            },
+            {
+                "title": "Instructional Quality & Course Feedback",
+                "description": "Feedback on training delivery, materials, and future recommendations",
+                "entries": [
+                    {
+                        "question_number": 3,
+                        "question": "How would you rate the overall instructional delivery and clarity of explanation?",
+                        "question_type": "RADIO",
+                        "is_required": True,
+                        "is_follow_up": False,
+                        "choices": [
+                            {"choice_order": "A", "choice_text": "Excellent — clear, engaging, and well-paced"},
+                            {"choice_order": "B", "choice_text": "Good — covered content thoroughly"},
+                            {"choice_order": "C", "choice_text": "Fair — pacing or explanations could improve"},
+                            {"choice_order": "D", "choice_text": "Poor — unclear explanations or inadequate materials"},
+                        ],
+                    },
+                    {
+                        "question_number": 4,
+                        "question": "What recommendations do you have to enhance future iterations of this curriculum?",
+                        "question_type": "TEXT",
+                        "is_required": False,
+                        "is_follow_up": False,
+                        "choices": [],
+                    },
+                ],
+            },
+        ],
+    }
+
+    data["surveys"] = [baseline_survey, endline_survey]
+
+
+def _ensure_formal_assessments(
+    data: dict,
+    training_profile: Optional[dict] = None,
+) -> None:
+    existing = data.get("formal_assessments")
+    if isinstance(existing, list) and len(existing) >= 2:
+        for a in existing:
+            atype = str(a.get("assessment_type", "PRE_POST")).upper()
+            a["assessment_type"] = atype if atype in {"PRE_POST", "CAT", "OTHER"} else "PRE_POST"
+            atarget = str(a.get("assessment_target", "INDIVIDUAL")).upper()
+            a["assessment_target"] = atarget if atarget in {"INDIVIDUAL", "GROUP"} else "INDIVIDUAL"
+            dur = a.get("duration_minutes", 30)
+            a["duration_minutes"] = int(dur) if isinstance(dur, (int, float)) and dur > 0 else 30
+        return
+
+    tp = (training_profile or {}).get("training") or (training_profile or {})
+    title = tp.get("title", data.get("training_title", "Training"))
+    mods = data.get("modules", [])
+    m1_name = mods[0].get("name", "Foundational Concepts") if mods else "Foundational Concepts"
+
+    pre_assessment = {
+        "name": f"{title} — Diagnostic Pre-Assessment",
+        "assessment_type": "PRE_POST",
+        "description": "Baseline assessment to measure incoming knowledge, prerequisite grasp, and foundational domain concepts before instruction begins.",
+        "is_timed": True,
+        "duration_minutes": 25,
+        "max_attempts": 1,
+        "passing_score": 60.0,
+        "assessment_target": "INDIVIDUAL",
+        "sections": [
+            {
+                "section_number": 1,
+                "title": f"Section 1: Prerequisite & Systems Knowledge ({m1_name})",
+                "description": "Evaluates foundational terminology, system principles, and operational context.",
+                "entries": [
+                    {
+                        "question_number": 1,
+                        "question": f"What is the primary operational objective of implementing {title} in an enterprise setting?",
+                        "question_type": "RADIO",
+                        "weight": 10.0,
+                        "choices": [
+                            {"choice_text": "Reduce routine overhead while maintaining 24/7 service availability and accuracy", "is_correct": True},
+                            {"choice_text": "Completely replace human operational oversight across all channels", "is_correct": False},
+                            {"choice_text": "Store unstructured data without audit logging", "is_correct": False},
+                            {"choice_text": "Bypass compliance requirements for digital interactions", "is_correct": False},
+                        ],
+                    },
+                    {
+                        "question_number": 2,
+                        "question": "When a digital workflow encounters an exception or unhandled request, what is the standard protocol?",
+                        "question_type": "RADIO",
+                        "weight": 10.0,
+                        "choices": [
+                            {"choice_text": "Trigger a controlled fallback and escalate to human operators with session context", "is_correct": True},
+                            {"choice_text": "Silently drop the request and restart the service", "is_correct": False},
+                            {"choice_text": "Generate a generic error and terminate the connection", "is_correct": False},
+                            {"choice_text": "Repeat the previous action in an infinite loop", "is_correct": False},
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+
+    post_assessment = {
+        "name": f"{title} — Comprehensive Post-Training Exam",
+        "assessment_type": "PRE_POST",
+        "description": "Summative assessment validating technical mastery, workflow execution, and troubleshooting competency across all completed modules.",
+        "is_timed": True,
+        "duration_minutes": 60,
+        "max_attempts": 2,
+        "passing_score": 75.0,
+        "assessment_target": "INDIVIDUAL",
+        "sections": [
+            {
+                "section_number": 1,
+                "title": "Section 1: Architectural Foundations & Workflows",
+                "description": "Validates system component knowledge, role boundaries, and end-to-end operational flows.",
+                "entries": [
+                    {
+                        "question_number": 1,
+                        "question": "Which mechanism ensures traceability and auditability across all customer interactions and system decisions?",
+                        "question_type": "RADIO",
+                        "weight": 10.0,
+                        "choices": [
+                            {"choice_text": "Centralized transaction logging with immutable audit trails", "is_correct": True},
+                            {"choice_text": "Ephemeral client-side browser caching", "is_correct": False},
+                            {"choice_text": "Periodic manual spreadsheet reconciliations", "is_correct": False},
+                            {"choice_text": "Unindexed system log printouts", "is_correct": False},
+                        ],
+                    },
+                    {
+                        "question_number": 2,
+                        "question": "In a scenario with degraded system performance, how should workload prioritization be applied?",
+                        "question_type": "RADIO",
+                        "weight": 10.0,
+                        "choices": [
+                            {"choice_text": "Prioritize critical core transactions while throttling non-essential background tasks", "is_correct": True},
+                            {"choice_text": "Reject all incoming requests indiscriminately", "is_correct": False},
+                            {"choice_text": "Disable all authentication and security checks to save bandwidth", "is_correct": False},
+                            {"choice_text": "Queue all transactions with unlimited timeout", "is_correct": False},
+                        ],
+                    },
+                ],
+            },
+            {
+                "section_number": 2,
+                "title": "Section 2: Incident Triage & Scenario Troubleshooting",
+                "description": "Scenario-based questions testing diagnostic reasoning and appropriate escalation procedures.",
+                "entries": [
+                    {
+                        "question_number": 3,
+                        "question": "A sudden surge of unrecognized transaction formats triggers widespread validation errors. What is the immediate first action?",
+                        "question_type": "RADIO",
+                        "weight": 15.0,
+                        "choices": [
+                            {"choice_text": "Isolate the ingress channel, engage the incident triage team, and review payload logs against current schema specifications", "is_correct": True},
+                            {"choice_text": "Delete recent database entries to free memory", "is_correct": False},
+                            {"choice_text": "Wait for customer complaint volume to subside", "is_correct": False},
+                            {"choice_text": "Revert the core banking database without taking snapshots", "is_correct": False},
+                        ],
+                    },
+                    {
+                        "question_number": 4,
+                        "question": "Detail the 3-step triage and resolution pathway when a high-priority customer dispute cannot be verified by the automated system.",
+                        "question_type": "TEXT",
+                        "weight": 15.0,
+                        "choices": [],
+                    },
+                ],
+            },
+        ],
+    }
+
+    data["formal_assessments"] = [pre_assessment, post_assessment]
+
+
+def _ensure_content_requests(
+    data: dict,
+    training_profile: Optional[dict] = None,
+) -> None:
+    existing = data.get("content_requests")
+    if isinstance(existing, list) and len(existing) >= 2:
+        return
+
+    tp = (training_profile or {}).get("training") or (training_profile or {})
+    title = tp.get("title", data.get("training_title", "Training"))
+    mods = data.get("modules", [])
+
+    reqs = []
+    for idx, m in enumerate(mods, 1):
+        m_name = m.get("name", f"Module {idx}")
+        m_id = m.get("id", f"mod-{idx}")
+        lessons = m.get("lessons", [])
+        l_id = lessons[0].get("id") if lessons else None
+
+        reqs.append({
+            "content_name": f"{m_name} — Presentation Slide Deck & Instructor Notes",
+            "content_type": "SLIDES",
+            "target_module": m_id,
+            "target_lesson": l_id,
+            "description": f"Comprehensive slide presentation covering {m_name}, detailing {m.get('key_concepts', 'key concepts')}, architecture diagrams, and instructor talking points.",
+        })
+
+    reqs.append({
+        "content_name": f"{title} — Practical Simulation & Lab Exercise Guide",
+        "content_type": "LAB_MANUAL",
+        "target_module": mods[0].get("id", "mod-1") if mods else "mod-1",
+        "target_lesson": None,
+        "description": f"Step-by-step participant laboratory manual with scenario walkthroughs, sample datasets, troubleshooting checklists, and solution guides for {title}.",
+    })
+
+    data["content_requests"] = reqs
+
+
+def _derive_domain_doc_url(topic_text: str) -> tuple[str, str]:
+    """Derive an authoritative documentation or reference guide URL based on topic keywords."""
+    t = topic_text.lower()
+    if any(k in t for k in ["kubernetes", "k8s", "cluster"]):
+        return "Kubernetes Official Documentation", "https://kubernetes.io/docs/home/"
+    elif any(k in t for k in ["docker", "container", "image"]):
+        return "Docker Architecture & Security Guide", "https://docs.docker.com/get-started/"
+    elif any(k in t for k in ["security", "threat", "vulnerability", "ransomware", "incident", "owasp"]):
+        return "OWASP Security Standards & Incident Guidance", "https://owasp.org/"
+    elif any(k in t for k in ["machine learning", "deep learning", "neural", "model", "scikit"]):
+        return "Machine Learning & Scikit-Learn Guide", "https://scikit-learn.org/stable/user_guide.html"
+    elif any(k in t for k in ["python", "django", "fastapi"]):
+        return "Python Official Documentation", "https://docs.python.org/3/"
+    elif any(k in t for k in ["sql", "database", "postgres", "query"]):
+        return "PostgreSQL & Relational DB Manual", "https://www.postgresql.org/docs/"
+    elif any(k in t for k in ["api", "rest", "microservice"]):
+        return "RESTful API Architectural Guidelines", "https://restfulapi.net/"
+    elif any(k in t for k in ["cloud", "aws", "azure", "gcp", "terraform"]):
+        return "Cloud Architecture Best Practices", "https://learn.microsoft.com/en-us/azure/architecture/"
+    elif any(k in t for k in ["banking", "finance", "fintech", "payment", "compliance"]):
+        return "Enterprise Banking & Regulatory Standards", "https://www.bis.org/bcbs/"
+    else:
+        q = urllib.parse.quote_plus(topic_text[:50])
+        return f"Technical Reference Guide: {topic_text[:35]}", f"https://en.wikipedia.org/wiki/Special:Search?search={q}"
+
+
+def _ensure_media_resources(
+    data: dict,
+    modules_context: Optional[list[dict]] = None,
+    training_profile: Optional[dict] = None,
+) -> None:
+    """
+    Resolve and attach video links, YouTube URLs, PDFs, and files to lessons and modules.
+    If no pre-existing DB contents exist, autonomously discovers and generates relevant
+    online video lectures and authoritative documentation references.
+    """
+    content_lookup: dict[str, dict] = {}
+    unassigned_contents: list[dict] = []
+    if modules_context:
+        for m in modules_context:
+            for c in m.get("accepted_contents", []):
+                cid = str(c.get("id", ""))
+                if cid:
+                    content_lookup[cid] = c
+                if c.get("link"):
+                    unassigned_contents.append(c)
+
+    # If custom resources were provided in training_profile
+    tp = training_profile or {}
+    t_obj = tp.get("training") or tp
+    training_title = t_obj.get("title", data.get("training_title", "Training"))
+    custom_links = tp.get("resource_links", [])
+    for link_str in custom_links:
+        if isinstance(link_str, str) and link_str.strip():
+            ft = "VIDEO" if any(k in link_str.lower() for k in ["youtube.com", "youtu.be", "vimeo", ".mp4"]) else "PDF" if ".pdf" in link_str.lower() else "LINK"
+            unassigned_contents.append({
+                "name": "Custom Recommended Resource",
+                "file_type": ft,
+                "link": link_str.strip(),
+                "description": "Integrated multimedia / external resource",
+            })
+
+    for mod in data.get("modules", []):
+        mod.setdefault("media_resources", [])
+        lessons = mod.get("lessons", [])
+        for lesson in lessons:
+            lesson_res = lesson.setdefault("media_resources", [])
+            for ref_id in lesson.get("content_references", []):
+                cid = str(ref_id)
+                if cid in content_lookup:
+                    c = content_lookup[cid]
+                    url = c.get("link") or c.get("reference_link")
+                    if url and not any(r.get("url") == url for r in lesson_res):
+                        lesson_res.append({
+                            "id": cid,
+                            "name": c.get("name") or "Course Content",
+                            "file_type": c.get("file_type") or "LINK",
+                            "url": url,
+                            "description": c.get("description"),
+                        })
+
+    # Distribute unassigned contents with valid links across lessons
+    if unassigned_contents:
+        all_lessons = [l for mod in data.get("modules", []) for l in mod.get("lessons", [])]
+        for idx, c in enumerate(unassigned_contents):
+            url = c.get("link") or c.get("reference_link")
+            if not url:
+                continue
+            res_item = {
+                "id": str(c.get("id") or ""),
+                "name": c.get("name") or "Attached Resource",
+                "file_type": c.get("file_type") or "LINK",
+                "url": url,
+                "description": c.get("description"),
+            }
+            if all_lessons:
+                target_lesson = all_lessons[idx % len(all_lessons)]
+                target_res = target_lesson.setdefault("media_resources", [])
+                if not any(r.get("url") == url for r in target_res):
+                    target_res.append(res_item)
+
+    # Autonomous discovery: for any lesson that lacks sufficient candidate resources,
+    # generate multiple curated candidates with evaluative pedagogy notes so the curriculum
+    # builder can easily compare and select the best option.
+    for mod in data.get("modules", []):
+        mod_name = mod.get("name", "Module")
+        for lesson in mod.get("lessons", []):
+            lesson_res = lesson.setdefault("media_resources", [])
+            l_name = lesson.get("name", "Topic")
+            l_id = lesson.get("id", "l")
+            existing_urls = {r.get("url") for r in lesson_res if r.get("url")}
+
+            # 1. Primary Video Lecture (Visual & Architecture Demonstration)
+            yt_query = urllib.parse.quote_plus(f"{training_title} {l_name} lecture tutorial")
+            yt_url = f"https://www.youtube.com/results?search_query={yt_query}"
+            if yt_url not in existing_urls:
+                lesson_res.append({
+                    "id": f"res-vid-{l_id}",
+                    "name": f"Video Masterclass: {l_name}",
+                    "file_type": "VIDEO",
+                    "url": yt_url,
+                    "description": f"Curated video lecture and technical walkthrough for {l_name}.",
+                    "pedagogy_notes": "⭐ Top Visual Pick: Recommended for foundational concept demonstration, workflow visualization, and real-world system architecture walkthroughs.",
+                    "difficulty_level": "Intermediate",
+                    "estimated_time": "25 mins",
+                    "is_primary": True,
+                })
+
+            # 2. Authoritative Standards & Documentation (Production Compliance)
+            doc_name, doc_url = _derive_domain_doc_url(f"{training_title} {mod_name} {l_name}")
+            if doc_url not in existing_urls:
+                lesson_res.append({
+                    "id": f"res-doc-{l_id}",
+                    "name": doc_name,
+                    "file_type": "DOCS",
+                    "url": doc_url,
+                    "description": f"Official documentation and technical standards reference for {l_name}.",
+                    "pedagogy_notes": "Authoritative Reference: Essential for regulatory compliance, security verification, API schemas, and production reference.",
+                    "difficulty_level": "Advanced",
+                    "estimated_time": "15 mins read",
+                    "is_primary": False,
+                })
+
+            # 3. Hands-on Practice Lab / Code Sandbox (Kinesthetic Execution)
+            gh_query = urllib.parse.quote_plus(f"{l_name} lab tutorial code")
+            lab_url = f"https://github.com/search?q={gh_query}&type=repositories"
+            if lab_url not in existing_urls:
+                lesson_res.append({
+                    "id": f"res-lab-{l_id}",
+                    "name": f"Hands-On Lab & Practical Sandbox: {l_name}",
+                    "file_type": "LAB",
+                    "url": lab_url,
+                    "description": f"Executable code examples, scenario troubleshooting setups, and exercise tasks.",
+                    "pedagogy_notes": "Practical Kinesthetic: Best for hands-on application, scenario triage exercises, and interactive simulation.",
+                    "difficulty_level": "Intermediate",
+                    "estimated_time": "35 mins practical",
+                    "is_primary": False,
+                })
+
+
+ENHANCE_SYSTEM_PROMPT = """You are an expert instructional designer and senior enterprise curriculum architect.
+Your task is to take a draft training course proposal and elevate it into a polished, professional specification:
+1. Polish the Course Title to be precise, engaging, and aligned with industry standards.
+2. Expand and rewrite the Business Rationale to clearly articulate the business problem, operational bottlenecks, risk mitigations, and expected measurable ROI. Correct all grammar and phrasing.
+3. Organize and sharpen the Scope into concrete technical domains, key workflows, architectures, and boundaries.
+4. Recommend comprehensive, realistic Entry Prerequisites matching the learner level.
+5. Recommend an optimal suggested duration in hours (e.g. 8.0, 16.0, 24.0, 32.0).
+6. Provide a concise 1-sentence Enhancement Summary highlighting key improvements.
+
+Output ONLY a valid JSON object matching the requested schema.
+"""
+
+
+async def enhance_course_draft(draft: dict) -> dict:
+    """Use Gemma to polish, correct grammar, and expand curriculum draft specifications."""
+    prereq_val = draft.get('prerequisites', '')
+    if isinstance(prereq_val, list):
+        prereq_str = ", ".join(str(p) for p in prereq_val)
+    else:
+        prereq_str = str(prereq_val or "")
+
+    prompt = f"""\
+DRAFT SPECIFICATION TO ENHANCE:
+Title: {draft.get('title', '')}
+Organization: {draft.get('company_name', 'Enterprise')}
+Industry: {draft.get('industry_type', 'Technology')}
+Draft Rationale: {draft.get('rationale', '')}
+Draft Scope / Topics: {draft.get('scope', '')}
+Learner Level: {draft.get('learner_level', 'Intermediate')}
+Draft Prerequisites: {prereq_str}
+
+Elevate, correct grammar, and expand this specification into production-ready curriculum parameters now.\
+"""
+    try:
+        raw = await call_gemma_json(
+            prompt=prompt,
+            system_prompt=ENHANCE_SYSTEM_PROMPT,
+            schema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "scope": {"type": "string"},
+                    "learner_level": {"type": "string"},
+                    "prerequisites": {"type": "string"},
+                    "suggested_duration_hours": {"type": "number"},
+                    "enhancement_summary": {"type": "string"},
+                },
+                "required": ["title", "rationale", "scope", "prerequisites", "enhancement_summary"]
+            },
+            max_retries=2,
+        )
+    except Exception as e:
+        if "quota" in str(e).lower() or "limit" in str(e).lower():
+            raise
+        logger.warning("[CurriculumBuilder] enhance_course_draft LLM fallback: %s", e)
+        raw = {}
+
+
+    raw.setdefault("title", draft.get("title", ""))
+    raw.setdefault("rationale", draft.get("rationale", ""))
+    raw.setdefault("scope", draft.get("scope", ""))
+    raw.setdefault("learner_level", draft.get("learner_level", "Intermediate"))
+    raw.setdefault("prerequisites", prereq_str)
+    raw.setdefault("suggested_duration_hours", 16.0)
+    raw.setdefault("enhancement_summary", "Refined grammar, enhanced business rationale, and structured scope.")
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -631,7 +1503,12 @@ async def generate_curriculum(
         len(raw.get("modules", [])),
     )
 
-    fixed, report = validate_and_fix_curriculum(raw)
+    fixed, report = validate_and_fix_curriculum(
+        raw,
+        training_profile=training_profile,
+        audience=audience,
+        modules_context=modules,
+    )
 
     if report.rubrics_weight_normalized or report.rubrics_criteria_padded:
         logger.warning(

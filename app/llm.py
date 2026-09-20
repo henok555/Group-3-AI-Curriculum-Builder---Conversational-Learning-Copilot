@@ -21,12 +21,12 @@ from typing import Optional
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# Gemma 4 (26B-A4B) Instruct — recommended model for this service
-# Override via GEMMA_MODEL env var if needed (e.g. for testing paid tier)
-GEMMA_MODEL = os.getenv("GEMMA_MODEL", "google/gemma-4-26b-a4b-it:free")
+# Gemma 4 31B Instruct (free tier) — dense model, good structured JSON output
+# Override via GEMMA_MODEL env var if needed
+GEMMA_MODEL = os.getenv("GEMMA_MODEL", "google/gemma-4-31b-it:free")
 
-# Timeout: E4B is fast, but curriculum generation prompts are large
-DEFAULT_TIMEOUT_SECONDS = 120.0
+# Timeout: curriculum generation prompts require large outputs
+DEFAULT_TIMEOUT_SECONDS = 300.0
 
 
 class LLMError(Exception):
@@ -47,7 +47,7 @@ async def call_gemma(
     prompt: str,
     system_prompt: Optional[str] = None,
     temperature: float = 0.2,
-    max_tokens: int = 4096,
+    max_tokens: int = 8192,
     response_format: Optional[dict] = None,
 ) -> str:
     """
@@ -73,66 +73,108 @@ async def call_gemma(
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
+    api_key = os.getenv("OPENROUTER_API_KEY") or OPENROUTER_API_KEY
+    model = os.getenv("GEMMA_MODEL") or GEMMA_MODEL
+
     payload: dict = {
-        "model": GEMMA_MODEL,
+        "model": model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "reasoning": {"max_tokens": 0},
     }
+    # For models with thinking/reasoning modes, set effort to none to dedicate 100% tokens to JSON content
+    if any(k in model.lower() for k in ["nemotron", "qwen", "liquid"]):
+        payload["reasoning"] = {"effort": "none"}
     if response_format:
         payload["response_format"] = response_format
 
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "http://localhost:8000",
         "X-Title": "TSP AI Service",
     }
 
-    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
-        max_attempts = 4
-        for attempt in range(1, max_attempts + 1):
-            try:
+    import asyncio as _asyncio
+    max_attempts = 6
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
                 resp = await client.post(
                     f"{OPENROUTER_BASE_URL}/chat/completions",
                     headers=headers,
                     json=payload,
                 )
-                resp.raise_for_status()
-                data = resp.json()
-                msg = data["choices"][0]["message"]
-                content = msg.get("content")
-                if not content or not content.strip():
-                    content = msg.get("reasoning", "")
-                return (content or "").strip()
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429 and attempt < max_attempts:
-                    # Rate limited — exponential backoff (10s, 20s, 40s)
-                    wait = 10 * (2 ** (attempt - 1))
-                    print(f"[LLM] Rate limited (429), retrying in {wait}s (attempt {attempt}/{max_attempts})")
-                    import asyncio
-                    await asyncio.sleep(wait)
-                    continue
+            resp.raise_for_status()
+            data = resp.json()
+            msg = data["choices"][0]["message"]
+            content = msg.get("content")
+            if not content or not content.strip():
+                content = msg.get("reasoning", "")
+            return (content or "").strip()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            err_text = e.response.text
+            # If daily free limit reached, retrying in seconds is futile and causes timeouts
+            if "free-models-per-day" in err_text or "openrouter_free_tier_daily" in err_text:
                 raise LLMError(
-                    f"OpenRouter API error {e.response.status_code}: {e.response.text}"
+                    "OpenRouter free-tier daily quota exceeded (50 free requests/day limit reached). "
+                    "Please replace OPENROUTER_API_KEY in .env with a new key or add credits."
                 ) from e
-            except Exception as e:
-                raise LLMError(f"LLM call failed: {e}") from e
+
+            if status == 429 and attempt < max_attempts:
+                wait = 5 * attempt
+                err_detail = err_text[:120].replace('\n', ' ')
+                print(f"[LLM] Short rate limit (429: {err_detail}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
+                await _asyncio.sleep(wait)
+                continue
+
+            if status == 402 and attempt < max_attempts:
+                current = payload.get("max_tokens", 4096)
+                reduced = max(1024, current // 2)
+                print(f"[LLM] Credit limit (402): reducing max_tokens {current} → {reduced} (attempt {attempt}/{max_attempts})")
+                payload["max_tokens"] = reduced
+                continue
+            raise LLMError(
+                f"OpenRouter API error {status}: {e.response.text}"
+            ) from e
+        except (httpx.ReadError, httpx.ConnectError, httpx.TimeoutException,
+                httpx.RemoteProtocolError, httpx.WriteError) as e:
+            if attempt < max_attempts:
+                wait = 5 * attempt
+                print(f"[LLM] Network error ({type(e).__name__}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
+                await _asyncio.sleep(wait)
+                continue
+            raise LLMError(f"Network error after {max_attempts} attempts: {e}") from e
+        except Exception as e:
+            raise LLMError(f"LLM call failed: {e}") from e
 
 
 def _extract_json_from_response(text: str) -> str:
     """
-    Strip markdown fences and extract the first JSON object/array from a response.
-    Handles ```json ... ``` blocks that some models emit despite being told not to.
+    Strip markdown fences and extract the JSON object/array from a response.
+    Handles ```json ... ``` blocks, trailing commentary, and preamble text.
     """
-    # Strip markdown fences
-    text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
-    text = re.sub(r"\s*```$", "", text.strip())
-    # Find first { or [ and last matching bracket
+    text = text.strip()
+    # Check for markdown code fence first
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE)
+    if fence_match:
+        text = fence_match.group(1).strip()
+
+    # Prefer locating start of a genuine JSON object e.g. {"key":
+    obj_match = re.search(r'\{\s*"[a-zA-Z0-9_-]+"\s*:', text)
+    if obj_match:
+        start = obj_match.start()
+        end = text.rfind("}")
+        if end != -1 and end >= start:
+            return text[start:end+1]
+
     start = next((i for i, c in enumerate(text) if c in "{["), None)
     if start is None:
         return text
+    end = max(text.rfind("}"), text.rfind("]"))
+    if end != -1 and end >= start:
+        return text[start:end+1]
     return text[start:]
 
 
@@ -185,27 +227,29 @@ async def call_gemma_json(
             raw = await call_gemma(
                 full_prompt,
                 system_prompt,
-                temperature=0.1,  # Low temperature for deterministic JSON
-                max_tokens=8192,
+                temperature=0.1,
+                max_tokens=7500,
                 response_format={"type": "json_object"},
             )
+            print(f"[LLM JSON] Raw response length: {len(raw)}, start: {repr(raw[:150])}, end: {repr(raw[-150:])}")
             clean = _extract_json_from_response(raw)
-            return json.loads(clean)
+            try:
+                return json.loads(clean)
+            except json.JSONDecodeError as jde:
+                print(f"[LLM JSON] JSONDecodeError: {jde}. Clean start: {repr(clean[:300])}")
+                raise
 
         except json.JSONDecodeError as e:
             last_error = f"JSON parse error (attempt {attempt + 1}): {e}"
-            # Feed the error back into the next attempt's prompt
             full_prompt += (
                 f"\n\nYour previous response could not be parsed as JSON. "
                 f"Error: {e}. Output ONLY valid JSON starting with {{."
             )
 
-        except LLMError:
-            # API/network errors — re-raise immediately on final attempt
+        except LLMError as e:
             if attempt == max_retries - 1:
                 raise
-            # Otherwise retry
-            last_error = f"LLM error on attempt {attempt + 1}"
+            last_error = f"LLM error on attempt {attempt + 1}: {e}"
 
     raise LLMError(
         f"Failed to get valid JSON after {max_retries} attempts. Last error: {last_error}"
