@@ -62,73 +62,157 @@ LEARNER_LEVEL_TO_BLOOM: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 CURRICULUM_SYSTEM_PROMPT = """\
-You are an expert curriculum designer applying Bloom's Taxonomy and constructive alignment.
-Generate a pedagogically sound, structured curriculum for the TSP (Training Solution Platform).
+CRITICAL: You must output ONLY a valid JSON object.
+DO NOT output any pre-amble, scratchpad, drafting, reasoning, or text explanations.
+Your response MUST start immediately with the character '{' on line 1.
+
+You are a senior curriculum architect with expertise in Bloom's Taxonomy, constructive alignment, and adult learning theory.
+Your task is to produce a rich, deployment-ready curriculum for the TSP (Training Solution Platform).
 
 ## Pedagogical Principles
-- Constructive alignment: objectives → teaching activities → assessments must all align
-- Write lesson objectives using action verbs from the target Bloom's cognitive level
-- Scaffold learning: each module builds on knowledge from the previous one
-- Vary instructional methods across modules (lecture, discussion, practical, case study)
+- Constructive alignment: lesson objectives → teaching activities → assignments → assessments must all align
+- Every lesson objective MUST start with a precise Bloom's action verb from the instructed cognitive level
+- LESSON OBJECTIVE vs DESCRIPTION RULE:
+    * objective: a single sentence starting with a Bloom's action verb (e.g. "Differentiate X from Y")
+    * description: 2–3 sentences giving learning context, scenario, and what participants will explore — NEVER copy the objective verbatim
+- Scaffold learning: each module explicitly builds on knowledge from the previous module
+- Vary instructional methods per lesson: choose from [Lecture, Demonstration, Discussion-Based, Case Study, Practical, Role Play, Simulation, Peer Review]
+- Vary assignment types across modules: choose from [individual, group, practical, written, presentation, portfolio]
 
 ## Structural Requirements
-- Minimum 3 modules, each with 2–4 lessons
+- 3–5 modules, each with 2–4 lessons
 - Each module MUST have: at least 1 assignment, 1 assessment, and 1 rubric
-- Each rubric MUST have EXACTLY 3 criteria; weights must sum to 1.0 (use 0.33, 0.33, 0.34)
-- Each rubric criterion MUST include 4 performance levels keyed "4", "3", "2", "1"
+- Each rubric MUST have EXACTLY 3 criteria; weights [0.33, 0.33, 0.34]
+- Each rubric criterion MUST include 4 performance levels keyed "4", "3", "2", "1" with specific descriptors
+- RUBRIC SPECIFICITY RULE: All 3 criteria MUST be domain-specific to the module topic. NO generic criteria like "Clarity and Coherence" unless it is the 3rd criterion. Criteria 1 and 2 must evaluate technical/operational competencies directly related to the module.
+- RUBRIC LINKING RULE: Each assignment's rubric_id MUST reference its module's rubric id (e.g. assignment rubric_id = "rub-1" when module rubric id is "rub-1")
+- ASSESSMENT QUESTIONS RULE: Every assessment MUST include 3–5 questions. Each question must have: id, question (text), type ("multiple_choice" | "short_answer" | "scenario"), points (integer), and for multiple_choice: options (list of 4 strings) and correct_answer (string)
+- DIFFERENTIATION RULE: Every module MUST populate differentiation_strategies (e.g. scaffolding for less experienced, extension tasks for advanced, visual aids for different learning styles)
+- INSTRUCTIONAL METHODS RULE: Every lesson MUST list at least 1 instructional method
 - All IDs must be unique strings (format: "mod-1", "les-1-1", "asgn-1", "asmt-1", "rub-1", "crit-1-1")
 - Use ONLY information from the provided training profile — do not invent facts
+
+## Duration Rules
+- Lesson durations must be realistic: 0.5–2.0 HOURS each. Never output > 8 HOURS for a single lesson.
+- Module duration = sum of its lesson durations. Never output module duration > 24 HOURS.
 
 ## Required JSON Fields
 The top-level object must include:
   - training_id (string UUID)
   - training_title (string)
   - modules (array, min 3)
-  - audience_profile_summary (object)
+  - audience_profile_summary (object with keys: education_level, language, learner_level, work_experience, participants, delivery_mode)
   - objectives_mapping (object: objective_id → [module_id, ...])
 
-## Few-Shot Rubric Example
+## Few-Shot Example: Module with all required fields
 ```json
 {
-  "id": "rub-1",
-  "title": "Module 1 Assignment Rubric",
-  "description": "Evaluates quality of practical demonstration",
-  "criteria": [
+  "id": "mod-1",
+  "name": "Example Module",
+  "description": "Participants examine the operational structure of the platform and deconstruct how user roles interact with core system workflows.",
+  "key_concepts": "Role-based access, workflow orchestration, audit trail, case escalation",
+  "teaching_strategy": "Scenario-based learning with live system demonstration and guided Q&A",
+  "differentiation_strategies": "Scaffolding: provide step-by-step role guides for less experienced learners. Extension: challenge advanced learners to map edge-case escalation paths.",
+  "inclusion_strategy": "Use visual role-interaction diagrams and bilingual glossary cards for diverse literacy levels.",
+  "duration": 3.0,
+  "duration_type": "HOURS",
+  "module_order": 1,
+  "objective_ids": ["<uuid-from-objectives-list>"],
+  "instructional_methods": ["Demonstration", "Discussion-Based"],
+  "lessons": [
     {
-      "criterion": "Content Accuracy",
-      "description": "Correctness of information presented",
-      "weight": 0.33,
-      "levels": {
-        "4": "All content is accurate, fully supported by training materials",
-        "3": "Most content is accurate with minor errors",
-        "2": "Some inaccuracies that affect understanding",
-        "1": "Significant inaccuracies throughout"
-      }
-    },
-    {
-      "criterion": "Practical Application",
-      "description": "Ability to apply concepts to real-world scenarios",
-      "weight": 0.33,
-      "levels": {
-        "4": "Demonstrates clear, creative real-world application",
-        "3": "Applies concepts correctly in most cases",
-        "2": "Limited application with prompting needed",
-        "1": "Unable to apply concepts without significant support"
-      }
-    },
-    {
-      "criterion": "Communication",
-      "description": "Clarity and professionalism of presentation",
-      "weight": 0.34,
-      "levels": {
-        "4": "Exceptionally clear, professional, and well-structured",
-        "3": "Clear and organised with minor issues",
-        "2": "Somewhat unclear or disorganised",
-        "1": "Difficult to understand; lacks structure"
-      }
+      "id": "les-1-1",
+      "name": "Platform Overview",
+      "description": "Learners explore the platform dashboard, examining how the system is structured to support multiple user roles. They trace a sample customer case from submission to resolution.",
+      "objective": "Deconstruct the platform's user-role structure and attribute each role's responsibilities within a standard case lifecycle.",
+      "bloom_level": "Analyze",
+      "duration": 1.5,
+      "duration_type": "HOURS",
+      "instructional_methods": ["Demonstration", "Discussion-Based"],
+      "content_references": []
     }
   ],
-  "total_weight": 1.0
+  "assignments": [
+    {
+      "id": "asgn-1",
+      "title": "Role-Workflow Mapping Exercise",
+      "description": "Participants map all user roles to their corresponding system actions in a given scenario, highlighting decision points and escalation triggers.",
+      "type": "written",
+      "estimated_hours": 1.5,
+      "rubric_id": "rub-1"
+    }
+  ],
+  "assessments": [
+    {
+      "id": "asmt-1",
+      "title": "Module 1 Knowledge Check",
+      "description": "Tests comprehension of platform structure, user roles, and case workflows.",
+      "type": "quiz",
+      "duration_minutes": 20,
+      "max_attempts": 2,
+      "passing_score": 70.0,
+      "rubric_id": "rub-1",
+      "questions": [
+        {
+          "id": "q-1-1",
+          "question": "Which user role is responsible for escalating unresolved cases?",
+          "type": "multiple_choice",
+          "points": 10,
+          "options": ["Customer", "Agent", "Supervisor", "System"],
+          "correct_answer": "Supervisor"
+        },
+        {
+          "id": "q-1-2",
+          "question": "Describe the steps the system follows when a dispute is flagged by a customer.",
+          "type": "scenario",
+          "points": 20
+        }
+      ]
+    }
+  ],
+  "rubrics": [
+    {
+      "id": "rub-1",
+      "title": "Role-Workflow Mapping Rubric",
+      "description": "Evaluates accuracy of role mapping and workflow analysis",
+      "criteria": [
+        {
+          "criterion": "Role-Action Accuracy",
+          "description": "Correctness of mapping each user role to its system actions",
+          "weight": 0.33,
+          "levels": {
+            "4": "All roles accurately mapped with all system actions identified",
+            "3": "Most roles correctly mapped with minor omissions",
+            "2": "Some roles mapped but key actions missing",
+            "1": "Role-action mapping is largely inaccurate or missing"
+          }
+        },
+        {
+          "criterion": "Escalation & Decision Point Identification",
+          "description": "Ability to identify decision points and escalation triggers in the workflow",
+          "weight": 0.33,
+          "levels": {
+            "4": "All decision points and escalation triggers correctly identified with justification",
+            "3": "Most decision points identified; minor gaps in escalation paths",
+            "2": "Some decision points noted but escalation logic is incomplete",
+            "1": "Fails to identify key decision points or escalation triggers"
+          }
+        },
+        {
+          "criterion": "Clarity and Structure",
+          "description": "Coherence and professional presentation of the workflow map",
+          "weight": 0.34,
+          "levels": {
+            "4": "Exceptionally clear, professionally structured, and easy to follow",
+            "3": "Clear and organised with minor presentation issues",
+            "2": "Somewhat unclear or disorganised in structure",
+            "1": "Difficult to follow; lacks logical structure"
+          }
+        }
+      ],
+      "total_weight": 1.0
+    }
+  ]
 }
 ```
 
@@ -159,32 +243,52 @@ def _flatten_objectives(objectives: list) -> list[dict]:
     return flat
 
 
+def _to_hours(value: float, duration_type: str) -> float:
+    """Convert DB duration value to hours for prompt display."""
+    dt = (duration_type or "HOURS").upper()
+    if dt == "MINUTES":
+        return round(value / 60, 2)
+    if dt == "DAYS":
+        return round(value * 8, 2)  # treat 1 day = 8 hours
+    return value  # already hours
+
+
 def _format_module_block(module: dict, fallback_order: int = 0) -> str:
     """Format one TSP module + its lessons and content into a prompt block."""
-    # module_order is NULL for some records — fallback to row position
     order = module.get("module_order") or fallback_order
+
+    raw_dur = module.get('duration', '?')
+    raw_type = module.get('duration_type', 'HOURS')
+    if isinstance(raw_dur, (int, float)):
+        display_dur = f"{_to_hours(raw_dur, raw_type)} HOURS"
+    else:
+        display_dur = f"{raw_dur} {raw_type}"
 
     lines = [
         f"MODULE {order}: {module.get('name', 'Unnamed')}",
         f"  Description: {module.get('description', 'N/A')}",
         f"  Key concepts: {module.get('key_concepts', 'N/A')}",
-        f"  Duration: {module.get('duration', '?')} {module.get('duration_type', 'HOURS')}",
+        f"  Duration: {display_dur}",
         f"  Teaching strategy: {module.get('teaching_strategy', 'N/A')}",
         f"  Instructional methods: {', '.join(im['name'] for im in module.get('instructional_methods', [])) or 'N/A'}",
-        f"  Assessment types: {', '.join(module.get('assessment_types', [])) or 'N/A'}",
         f"  Primary materials: {module.get('primary_materials', 'N/A')}",
         f"  Secondary materials: {module.get('secondary_materials', 'N/A')}",
         f"  Digital tools: {module.get('digital_tools', 'N/A')}",
         f"  Differentiation strategies: {module.get('differentiation_strategies', 'N/A')}",
         f"  Inclusion strategy: {module.get('inclusion_strategy', 'N/A')}",
-        f"  Technology integration: {module.get('technology_integration_description', 'N/A')}",
     ]
 
     for lesson in module.get("lessons", []):
         methods = [im["name"] for im in lesson.get("instructional_methods", [])]
+        lesson_dur = lesson.get('duration', '?')
+        lesson_type = lesson.get('duration_type', 'HOURS')
+        if isinstance(lesson_dur, (int, float)):
+            lesson_display = f"{_to_hours(lesson_dur, lesson_type)} HOURS"
+        else:
+            lesson_display = f"{lesson_dur} {lesson_type}"
         lines += [
             f"  LESSON: {lesson.get('name', 'Unnamed')}",
-            f"    Duration: {lesson.get('duration', '?')} {lesson.get('duration_type', 'HOURS')}",
+            f"    Duration: {lesson_display}",
             f"    Objective: {lesson.get('objective', 'N/A')}",
             f"    Methods: {', '.join(methods) or 'N/A'}",
         ]
@@ -257,8 +361,23 @@ def build_curriculum_prompt(
     # Objective IDs for mapping instructions
     obj_ids_sample = ", ".join(f'"{o["id"]}"' for o in all_objectives[:8]) if all_objectives else '"obj-1", "obj-2"'
 
+    # Compute total training hours budget for duration guidance
+    raw_duration = training.get('duration', 0) or 0
+    raw_dur_type = training.get('duration_type', 'HOURS')
+    total_hours = _to_hours(float(raw_duration), raw_dur_type) if raw_duration else 0
+    lesson_budget_hint = (
+        f"Total training duration: {total_hours:.1f} hours. "
+        f"Distribute lesson durations proportionally so all lesson durations sum to approximately {total_hours:.1f} hours. "
+        f"Each lesson must be 0.5–2.0 HOURS. Never assign > 8 HOURS to a single lesson."
+        if total_hours > 0 else
+        "Each lesson must be 0.5–2.0 HOURS. Module duration = sum of lesson durations."
+    )
+
+    delivery = training.get('delivery_method', 'N/A') or 'N/A'
+    n_participants = training.get('total_participants', 'N/A')
+
     return f"""\
-Generate a complete, pedagogically sound curriculum for the following TSP training.
+Generate a complete, deployment-ready curriculum for the following TSP training.
 
 ═══════════════════════════════════════════════
 TRAINING OVERVIEW
@@ -269,9 +388,9 @@ Organization:  {training.get('company_name', 'N/A')}
 Industry:      {training.get('industry_type', 'N/A')} ({training.get('business_type', 'N/A')})
 Rationale:     {training.get('rationale', 'N/A')}
 Scope:         {training.get('scope', 'N/A')}
-Delivery:      {training.get('delivery_method', 'N/A')}
-Duration:      {training.get('duration', '?')} {training.get('duration_type', 'HOURS')}
-Participants:  {training.get('total_participants', 'N/A')}
+Delivery mode: {delivery}
+Duration:      {raw_duration} {raw_dur_type} (= {total_hours:.1f} HOURS total)
+Participants:  {n_participants}
 Keywords:      {', '.join(training_profile.get('keywords', [])) or 'N/A'}
 Purposes:      {', '.join(training_profile.get('purposes', [])) or 'N/A'}
 
@@ -280,8 +399,8 @@ AUDIENCE PROFILE
 ═══════════════════════════════════════════════
 {audience_block}
 
-Bloom's guidance: ALL lesson objectives must use action verbs from the "{bloom_target}" level.
-Example verbs: {bloom_verbs}
+Bloom's cognitive target: "{bloom_target}"
+Required action verbs for ALL lesson objectives: {bloom_verbs}
 
 ═══════════════════════════════════════════════
 TRAINING OBJECTIVES  (use these IDs in objectives_mapping and module.objective_ids)
@@ -290,29 +409,41 @@ TRAINING OBJECTIVES  (use these IDs in objectives_mapping and module.objective_i
 
 ═══════════════════════════════════════════════
 TSP MODULES AND ACCEPTED CONTENT
-(If modules exist below, use their description, key concepts, teaching strategy, and lessons as foundation.
-Enrich existing content without discarding it. If no modules are defined yet, generate 3–5 modules derived
-directly from the title, rationale, and scope above.)
+(If modules exist below, use them as the structural foundation — enrich don't discard.
+If no modules are defined yet, derive 3–5 modules from the training scope and rationale.)
 ═══════════════════════════════════════════════
 {modules_block}
 
 ═══════════════════════════════════════════════
 GENERATION INSTRUCTIONS
 ═══════════════════════════════════════════════
-1.  Create 3–5 modules — use existing TSP module structure if provided, or construct from title/scope if empty
-2.  Each module: 2–4 lessons, each with a Bloom's-aligned objective and bloom_level field
-3.  Each module: exactly 1 assignment (type: individual | group | practical | written | presentation)
-4.  Each module: exactly 1 assessment (type: quiz | exam | project | portfolio | presentation | practical)
-5.  Each module: exactly 1 rubric with EXACTLY 3 criteria, weights [0.33, 0.33, 0.34]
-6.  Fill module.objective_ids with objective IDs from the list above (or generated objective IDs if none were predefined)
-7.  Fill top-level objectives_mapping: {{ "objective_id": ["mod-id", ...] }}
-8.  Reference accepted content IDs in lesson.content_references where relevant
-9.  Set duration_type to "HOURS" throughout (matches TSP DB convention)
-10. Adapt language and depth to {learner_level} learners
-11. Do NOT invent facts — only use information from the training data above
-12. Set training_id to: "{training_id}"
+TOKEN BUDGET: Output must fit in 7500 tokens. Be precise and concise: 1 sentence per description, no padding.
 
-Available objective IDs for mapping: [{obj_ids_sample}]
+DURATION: {lesson_budget_hint}
+
+1.  Create 3–5 modules aligned to the TSP module structure above
+2.  Each module: 2–3 lessons — lesson objective MUST start with a Bloom's verb from "{bloom_target}" level
+    - lesson.description: 1–2 sentences of context (NEVER identical to objective)
+    - lesson.objective: one Bloom's verb sentence
+    - lesson.instructional_methods: REQUIRED — at least 1 method
+3.  Each module: exactly 1 assignment — set assignment.rubric_id = that module's rubric id
+4.  Each module: exactly 1 assessment
+    - Include exactly 2–3 questions. Mix types: multiple_choice, short_answer, scenario
+    - multiple_choice: must include options (4 strings) and correct_answer
+5.  Each module: exactly 1 rubric, EXACTLY 3 criteria, weights [0.33, 0.33, 0.34]
+    - Criteria 1 & 2 MUST be domain-specific technical competencies for this module
+    - Criterion 3 may be communication/presentation quality
+6.  Every module MUST have a non-empty differentiation_strategies (scaffolding + extension, 1 sentence each)
+7.  Fill module.objective_ids with objective IDs from the list above
+8.  Fill top-level objectives_mapping: {{ "objective_id": ["mod-id", ...] }}
+9.  Reference accepted content IDs in lesson.content_references where relevant
+10. Set duration_type to "HOURS" throughout
+11. Adapt language and examples to {learner_level} learners at {training.get('company_name', 'the organization')}
+12. Do NOT invent facts — only use information from the training data above
+13. Set training_id to: "{training_id}"
+14. audience_profile_summary: education_level, language, learner_level, work_experience, participants, delivery_mode
+
+Available objective IDs: [{obj_ids_sample}]
 
 Output the complete JSON curriculum now.\
 """
@@ -566,6 +697,47 @@ def validate_and_fix_curriculum(
         if mapping:
             curriculum_data["objectives_mapping"] = mapping
             report.objectives_mapping_inferred = True
+
+    # ── 6. Link rubric_id on assignments/assessments if missing ─────────────
+    for mod in curriculum_data.get("modules", []):
+        rubric_ids = [r.get("id") for r in mod.get("rubrics", []) if r.get("id")]
+        if rubric_ids:
+            primary = rubric_ids[0]
+            for asgn in mod.get("assignments", []):
+                if not asgn.get("rubric_id"):
+                    asgn["rubric_id"] = primary
+            for asmt in mod.get("assessments", []):
+                if not asmt.get("rubric_id"):
+                    asmt["rubric_id"] = primary
+
+    # ── 7. Clamp unrealistic lesson/module durations ─────────────────────────
+    for mod in curriculum_data.get("modules", []):
+        for lesson in mod.get("lessons", []):
+            dur = lesson.get("duration", 1.0)
+            if isinstance(dur, (int, float)) and dur > 8.0:
+                lesson["duration"] = round(dur / 60, 2) if dur > 60 else 1.0
+            lesson["duration_type"] = "HOURS"
+        # Recalculate module duration as sum of lesson durations
+        lesson_durs = [l.get("duration", 1.0) for l in mod.get("lessons", [])]
+        if lesson_durs and isinstance(lesson_durs[0], (int, float)):
+            total = round(sum(lesson_durs), 2)
+            if total > 0:
+                mod["duration"] = total
+        mod["duration_type"] = "HOURS"
+
+    # ── 8. De-duplicate lesson description == objective ──────────────────────
+    for mod in curriculum_data.get("modules", []):
+        for lesson in mod.get("lessons", []):
+            desc = (lesson.get("description") or "").strip()
+            obj = (lesson.get("objective") or "").strip()
+            if desc and obj and desc == obj:
+                # Generate a distinct context-setting description
+                lesson["description"] = (
+                    f"In this lesson, participants explore {lesson.get('name', 'this topic')} "
+                    f"through guided activities and examples drawn from the training context. "
+                    f"Learners engage with relevant scenarios and apply key concepts before "
+                    f"completing the lesson objective."
+                )
 
     return curriculum_data, report
 

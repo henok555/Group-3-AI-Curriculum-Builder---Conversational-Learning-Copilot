@@ -402,3 +402,83 @@ def test_normalize_then_validate_handles_llm_style_output():
     assert mod["lessons"][0]["name"] == "Lesson 1"
     assert report.modules_assignment_added >= 1
     assert report.modules_rubric_added >= 1
+
+
+def test_validate_links_missing_rubric_id():
+    """Missing rubric_id on assignment and assessment is linked to the module's rubric."""
+    data = _wrap([{
+        "id": "mod-1",
+        "name": "Module 1",
+        "lessons": [{"id": "l1", "name": "L1", "objective": "Obj", "duration": 1.0}],
+        "assignments": [{"id": "asgn-1", "title": "Asgn", "rubric_id": None}],
+        "assessments": [{"id": "asmt-1", "title": "Asmt", "rubric_id": None}],
+        "rubrics": [{"id": "rub-custom-1", "criteria": []}],
+    }])
+    fixed, _ = validate_and_fix_curriculum(data)
+    mod = fixed["modules"][0]
+    assert mod["assignments"][0]["rubric_id"] == "rub-custom-1"
+    assert mod["assessments"][0]["rubric_id"] == "rub-custom-1"
+
+
+def test_validate_clamps_unrealistic_durations():
+    """Unrealistically large lesson durations (>8h) are clamped and module duration recalculated."""
+    data = _wrap([{
+        "id": "mod-1",
+        "name": "Module 1",
+        "duration": 50.0,
+        "lessons": [
+            {"id": "l1", "name": "L1", "objective": "Obj1", "duration": 90.0},  # minutes accidentally passed as hours -> 1.5h
+            {"id": "l2", "name": "L2", "objective": "Obj2", "duration": 2.0},
+        ],
+        "assignments": [],
+        "assessments": [],
+        "rubrics": [],
+    }])
+    fixed, _ = validate_and_fix_curriculum(data)
+    mod = fixed["modules"][0]
+    assert mod["lessons"][0]["duration"] == 1.5
+    assert mod["lessons"][1]["duration"] == 2.0
+    assert mod["duration"] == 3.5
+    assert mod["duration_type"] == "HOURS"
+
+
+def test_validate_deduplicates_identical_description_and_objective():
+    """If lesson description is identical to objective, description is regenerated."""
+    data = _wrap([{
+        "id": "mod-1",
+        "name": "Module 1",
+        "lessons": [{
+            "id": "l1",
+            "name": "Data Pipelines",
+            "objective": "Build automated ETL data ingestion pipelines",
+            "description": "Build automated ETL data ingestion pipelines",
+            "duration": 1.5
+        }],
+        "assignments": [],
+        "assessments": [],
+        "rubrics": [],
+    }])
+    fixed, _ = validate_and_fix_curriculum(data)
+    lesson = fixed["modules"][0]["lessons"][0]
+    assert lesson["description"] != lesson["objective"]
+    assert "explore Data Pipelines" in lesson["description"]
+
+
+def test_extract_json_from_response_with_commentary():
+    """_extract_json_from_response ignores preamble commentary/brackets and finds JSON object."""
+    from app.llm import _extract_json_from_response
+    raw = (
+        'Here is my planning notes: [1, 2, 3] = total.\n'
+        'We will generate:\n'
+        '{\n'
+        '  "training_id": "test-uuid-123",\n'
+        '  "status": "success"\n'
+        '}\n'
+        'Hope this helps!'
+    )
+    clean = _extract_json_from_response(raw)
+    import json
+    parsed = json.loads(clean)
+    assert parsed["training_id"] == "test-uuid-123"
+    assert parsed["status"] == "success"
+
