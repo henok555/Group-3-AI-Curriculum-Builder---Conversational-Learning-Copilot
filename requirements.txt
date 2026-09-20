@@ -10,3 +10,6 @@ transformers>=4.38.0
 torch>=2.0.0
 numpy==1.26.4
 streamlit==1.39.0
+pypdf>=4.0.0
+requests>=2.31.0
+pytest>=8.0.0
