@@ -21,9 +21,17 @@ from typing import Optional
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# Gemma 4 31B Instruct (free tier) — dense model, good structured JSON output
-# Override via GEMMA_MODEL env var if needed
+# Primary model + ordered fallback chain (all free tier)
+# Override primary via GEMMA_MODEL env var if needed
 GEMMA_MODEL = os.getenv("GEMMA_MODEL", "google/gemma-4-31b-it:free")
+
+FALLBACK_MODELS = [
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "qwen/qwen3.8-27b:free",
+    "nex-agi/nex-n2.5-pro:free",
+]
 
 # Timeout: curriculum generation prompts require large outputs
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -74,20 +82,6 @@ async def call_gemma(
     messages.append({"role": "user", "content": prompt})
 
     api_key = os.getenv("OPENROUTER_API_KEY") or OPENROUTER_API_KEY
-    model = os.getenv("GEMMA_MODEL") or GEMMA_MODEL
-
-    payload: dict = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    # For models with thinking/reasoning modes, set effort to none to dedicate 100% tokens to JSON content
-    if any(k in model.lower() for k in ["nemotron", "qwen", "liquid"]):
-        payload["reasoning"] = {"effort": "none"}
-    if response_format:
-        payload["response_format"] = response_format
-
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -96,58 +90,100 @@ async def call_gemma(
     }
 
     import asyncio as _asyncio
-    max_attempts = 6
-    for attempt in range(1, max_attempts + 1):
-        try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
-                resp = await client.post(
-                    f"{OPENROUTER_BASE_URL}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-            resp.raise_for_status()
-            data = resp.json()
-            msg = data["choices"][0]["message"]
-            content = msg.get("content")
-            if not content or not content.strip():
-                content = msg.get("reasoning", "")
-            return (content or "").strip()
-        except httpx.HTTPStatusError as e:
-            status = e.response.status_code
-            err_text = e.response.text
-            # If daily free limit reached, retrying in seconds is futile and causes timeouts
-            if "free-models-per-day" in err_text or "openrouter_free_tier_daily" in err_text:
+    requested_model = os.getenv("GEMMA_MODEL") or GEMMA_MODEL
+
+    # Build ordered model list: requested first, then remaining fallbacks
+    models_to_try = [requested_model] + [m for m in FALLBACK_MODELS if m != requested_model]
+
+
+    max_attempts = 4  # per model
+    for model_index, model in enumerate(models_to_try):
+        payload: dict = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        # For models with thinking/reasoning modes, set effort to none to dedicate 100% tokens to JSON content
+        if any(k in model.lower() for k in ["nemotron", "qwen", "liquid"]):
+            payload["reasoning"] = {"effort": "none"}
+        if response_format:
+            payload["response_format"] = response_format
+
+        model_429_count = 0
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+                    resp = await client.post(
+                        f"{OPENROUTER_BASE_URL}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    )
+                resp.raise_for_status()
+                data = resp.json()
+                if model_index > 0:
+                    print(f"[LLM] Succeeded with fallback model: {model}")
+                msg = data["choices"][0]["message"]
+                content = msg.get("content")
+                if not content or not content.strip():
+                    content = msg.get("reasoning", "")
+                return (content or "").strip()
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                err_text = e.response.text
+                # If daily free limit reached, retrying in seconds is futile and causes timeouts
+                if "free-models-per-day" in err_text or "openrouter_free_tier_daily" in err_text:
+                    raise LLMError(
+                        "OpenRouter free-tier daily quota exceeded (50 free requests/day limit reached). "
+                        "Please replace OPENROUTER_API_KEY in .env with a new key or add credits."
+                    ) from e
+
+                if status == 429:
+                    model_429_count += 1
+                    # After 2 rate-limit hits on this model, switch to next fallback immediately
+                    if model_429_count >= 2 and model_index < len(models_to_try) - 1:
+                        print(f"[LLM] {model} rate-limited, switching to fallback model #{model_index + 2}")
+                        break  # break inner loop → try next model
+                    if attempt < max_attempts:
+                        wait = 3 * attempt
+                        err_detail = err_text[:120].replace('\n', ' ')
+                        print(f"[LLM] Rate limit 429 ({model}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
+                        await _asyncio.sleep(wait)
+                        continue
+                    elif model_index < len(models_to_try) - 1:
+                        print(f"[LLM] {model} exhausted, switching to next fallback")
+                        break
+
+                if status == 402 and attempt < max_attempts:
+                    current = payload.get("max_tokens", 4096)
+                    reduced = max(1024, current // 2)
+                    print(f"[LLM] Credit limit (402): reducing max_tokens {current} → {reduced} (attempt {attempt}/{max_attempts})")
+                    payload["max_tokens"] = reduced
+                    continue
+
+                # 404 = model unavailable for free → try next fallback immediately
+                if status == 404 and model_index < len(models_to_try) - 1:
+                    print(f"[LLM] {model} unavailable (404), switching to fallback model #{model_index + 2}")
+                    break
+
                 raise LLMError(
-                    "OpenRouter free-tier daily quota exceeded (50 free requests/day limit reached). "
-                    "Please replace OPENROUTER_API_KEY in .env with a new key or add credits."
+                    f"OpenRouter API error {status}: {e.response.text}"
                 ) from e
+            except (httpx.ReadError, httpx.ConnectError, httpx.TimeoutException,
+                    httpx.RemoteProtocolError, httpx.WriteError) as e:
+                if attempt < max_attempts:
+                    wait = 3 * attempt
+                    print(f"[LLM] Network error ({type(e).__name__}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
+                    await _asyncio.sleep(wait)
+                    continue
+                raise LLMError(f"Network error after {max_attempts} attempts: {e}") from e
+            except Exception as e:
+                raise LLMError(f"LLM call failed: {e}") from e
 
-            if status == 429 and attempt < max_attempts:
-                wait = 5 * attempt
-                err_detail = err_text[:120].replace('\n', ' ')
-                print(f"[LLM] Short rate limit (429: {err_detail}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
-                await _asyncio.sleep(wait)
-                continue
-
-            if status == 402 and attempt < max_attempts:
-                current = payload.get("max_tokens", 4096)
-                reduced = max(1024, current // 2)
-                print(f"[LLM] Credit limit (402): reducing max_tokens {current} → {reduced} (attempt {attempt}/{max_attempts})")
-                payload["max_tokens"] = reduced
-                continue
-            raise LLMError(
-                f"OpenRouter API error {status}: {e.response.text}"
-            ) from e
-        except (httpx.ReadError, httpx.ConnectError, httpx.TimeoutException,
-                httpx.RemoteProtocolError, httpx.WriteError) as e:
-            if attempt < max_attempts:
-                wait = 5 * attempt
-                print(f"[LLM] Network error ({type(e).__name__}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
-                await _asyncio.sleep(wait)
-                continue
-            raise LLMError(f"Network error after {max_attempts} attempts: {e}") from e
-        except Exception as e:
-            raise LLMError(f"LLM call failed: {e}") from e
+    raise LLMError(
+        f"All models exhausted after rate limiting. Models tried: {models_to_try}. "
+        "Consider adding credits at https://openrouter.ai/credits"
+    )
 
 
 def _extract_json_from_response(text: str) -> str:

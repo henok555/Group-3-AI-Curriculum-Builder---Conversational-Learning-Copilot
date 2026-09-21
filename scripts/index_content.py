@@ -127,17 +127,34 @@ async def index_training_content(
         )
 
         # Semantic sentence-aware chunking
-        chunks = semantic_chunk_text(
+        raw_chunks = semantic_chunk_text(
             combined_text,
             context_header=context_header,
             target_words=350,
             overlap_sentences=2,
         )
 
-        if not chunks:
+        if not raw_chunks:
             continue
 
-        for i, chunk_text in enumerate(chunks):
+        # Hard cap: any chunk exceeding MAX_CHUNK_CHARS is word-split into sub-chunks
+        MAX_CHUNK_CHARS = 4000
+        final_chunks = []
+        for raw in raw_chunks:
+            if len(raw) <= MAX_CHUNK_CHARS:
+                final_chunks.append(raw)
+            else:
+                words = raw.split()
+                chunk_size_words = MAX_CHUNK_CHARS // 6  # ~6 chars/word average
+                sub_start = 0
+                while sub_start < len(words):
+                    sub_end = min(sub_start + chunk_size_words, len(words))
+                    final_chunks.append(" ".join(words[sub_start:sub_end]))
+                    if sub_end == len(words):
+                        break
+                    sub_start = sub_end - 30  # small word overlap
+
+        for i, chunk_text in enumerate(final_chunks):
             chunks_to_insert.append({
                 "content_id": content_id,
                 "module_id": module_id,

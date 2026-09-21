@@ -789,6 +789,45 @@ class TSPClient:
         except Exception:
             return []
 
+    async def delete_training_chunks(self, training_id: str) -> int:
+        """Delete all chunks for a training from ai_content_chunks."""
+        if self._pool is None:
+            return 0
+        try:
+            async with self._pool.acquire() as conn:
+                res = await conn.execute("""
+                    DELETE FROM ai_content_chunks
+                    WHERE content_id IN (
+                        SELECT c.id FROM contents c
+                        JOIN modules m ON m.id = c.module_id
+                        WHERE m.training_id = $1::uuid
+                    )
+                """, training_id)
+                # Parse 'DELETE <count>'
+                parts = res.split()
+                return int(parts[1]) if len(parts) > 1 else 0
+        except Exception as e:
+            print(f"[Warning] Failed to delete chunks for training {training_id}: {e}")
+            return 0
+
+    async def count_training_chunks(self, training_id: str) -> int:
+        """Count total chunks stored for a training."""
+        if self._pool is None:
+            return 0
+        try:
+            async with self._pool.acquire() as conn:
+                val = await conn.fetchval("""
+                    SELECT count(*) FROM ai_content_chunks
+                    WHERE content_id IN (
+                        SELECT c.id FROM contents c
+                        JOIN modules m ON m.id = c.module_id
+                        WHERE m.training_id = $1::uuid
+                    )
+                """, training_id)
+                return int(val or 0)
+        except Exception:
+            return 0
+
 
 
 # Singleton instance for FastAPI lifespan

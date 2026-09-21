@@ -135,10 +135,11 @@ def split_into_sentences(text: str) -> List[str]:
             combined_part = text_part + punct_part
 
             words = (current + text_part).strip().lower().split()
-            last_word_with_punct = (words[-1] + punct_part.strip()).lower() if words else ""
+            last_word_with_punct = words[-1] + punct_part.strip().lower() if words else ""
+            clean_word = last_word_with_punct.strip("()[]\"'.,") + "."
 
-            # If it's a known abbreviation, accumulate rather than split
-            if any(last_word_with_punct == abbr or last_word_with_punct.endswith(abbr) for abbr in COMMON_ABBREVIATIONS):
+            # If it's a known abbreviation (exact match), accumulate rather than split
+            if clean_word in COMMON_ABBREVIATIONS or last_word_with_punct in COMMON_ABBREVIATIONS:
                 current += combined_part
             else:
                 candidate = (current + combined_part).strip()
@@ -165,10 +166,22 @@ def semantic_chunk_text(
     1. Chunks do not break sentences mid-thought.
     2. Overlap is sentence-aligned to retain semantic transitions.
     3. Structural metadata (e.g. [Module: ... | Lesson: ...]) is prefixed to each chunk.
+    4. Guardrail against runaway chunk sizes on massive uninterrupted text blocks.
     """
-    sentences = split_into_sentences(text)
-    if not sentences:
+    raw_sentences = split_into_sentences(text)
+    if not raw_sentences:
         return []
+
+    # Flatten oversized sentences that lack punctuation
+    sentences = []
+    for s in raw_sentences:
+        w = s.split()
+        if len(w) > target_words:
+            # Sub-split long sentences
+            sub_chunks = chunk_text(s, chunk_size=target_words, overlap=30)
+            sentences.extend(sub_chunks)
+        else:
+            sentences.append(s)
 
     chunks = []
     current_sentences = []
@@ -184,10 +197,18 @@ def semantic_chunk_text(
             chunk_body = " ".join(current_sentences).strip()
             chunks.append(f"{header_prefix}{chunk_body}".strip())
             
-            # Carry over overlap sentences
-            overlap = current_sentences[-overlap_sentences:] if len(current_sentences) >= overlap_sentences else current_sentences
-            current_sentences = list(overlap)
-            current_word_count = sum(len(s.split()) for s in current_sentences)
+            # Carry over up to overlap_sentences, but capped at half target_words
+            overlap = []
+            w_count = 0
+            for s in reversed(current_sentences[-overlap_sentences:]):
+                s_words = len(s.split())
+                if w_count + s_words <= (target_words // 2):
+                    overlap.insert(0, s)
+                    w_count += s_words
+                else:
+                    break
+            current_sentences = overlap
+            current_word_count = w_count
 
         current_sentences.append(sentence)
         current_word_count += words_in_sentence
@@ -271,13 +292,35 @@ def extract_text_from_link(link: str, timeout: int = 10) -> Optional[str]:
 
             resp = requests.get(target_url, timeout=timeout, headers={"User-Agent": "TSP-AI-RAG-Indexer/1.0"})
             if resp.status_code == 200:
+                raw_bytes = resp.content
+                raw_text_preview = raw_bytes[:512].lower()
+
+                # Reject HTML responses — never ingest a web page or viewer shell as training content
+                if (b"<!doctype html" in raw_text_preview or
+                        b"<html" in raw_text_preview or
+                        b"<head" in raw_text_preview):
+                    print(f"[Warning] URL returned HTML (not a PDF): {link} — skipping")
+                    return None
+
                 content_type = resp.headers.get("Content-Type", "").lower()
-                if "application/pdf" in content_type or link.lower().endswith(".pdf") or "drive.google.com" in link:
-                    text = extract_text_from_pdf_bytes(resp.content)
-                    if text:
+                is_pdf_attempt = ("application/pdf" in content_type or
+                                  link.lower().endswith(".pdf") or
+                                  "drive.google.com" in link)
+
+                if is_pdf_attempt:
+                    text = extract_text_from_pdf_bytes(raw_bytes)
+                    if text and text.strip():
                         return text
-                # Plain text / markdown fallback
-                return resp.text.strip()
+                    # PDF parse failed and no HTML fallback — return None
+                    return None
+
+                # For non-PDF plain text/markdown links only
+                content_text = resp.text.strip()
+                # Reject if it looks like HTML/JSON
+                if content_text.startswith("<") or content_text.startswith("{"):
+                    return None
+                return content_text
+
         except Exception as e:
             print(f"[Warning] Failed fetching remote link {link}: {e}")
             return None

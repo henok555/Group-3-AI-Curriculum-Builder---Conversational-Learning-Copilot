@@ -332,15 +332,19 @@ def build_copilot_prompt(
 ) -> str:
     """Build the copilot prompt with grounded context, learner profile, and conversation history."""
     context_parts = []
-    for i, chunk in enumerate(chunks):
+    for i, chunk in enumerate(chunks[:5]):
         mod = chunk.get("module_name", "General Module")
         les = chunk.get("lesson_name", "General Lesson")
         lvl = chunk.get("level", "MODULE")
         ftype = chunk.get("file_type", "TEXT")
         source_tag = f"[Module: {mod}, Lesson: {les}]"
+        raw_text = chunk.get("chunk_text", "").strip()
+        # Cap individual chunk text at 2000 chars to avoid exceeding model context limits
+        if len(raw_text) > 2000:
+            raw_text = raw_text[:2000] + "... [truncated]"
         context_parts.append(
             f"--- Context Source {i+1} {source_tag} (Level: {lvl}, Type: {ftype}) ---\n"
-            f"{chunk['chunk_text']}"
+            f"{raw_text}"
         )
     
     context = "\n\n".join(context_parts) if context_parts else "No relevant content found."
