@@ -38,7 +38,7 @@ from app.schemas import (
 )
 from app.llm import call_gemma, LLMError, test_gemma_connection
 from app.session_store import session_store
-from app.retrieval import retrieve_relevant_chunks, get_embedder_info, get_embedder_name
+from app.retrieval import retrieve_relevant_chunks, get_embedder_info, get_embedder_name, clean_chunk_excerpt
 from app.curriculum_builder import (
     generate_curriculum as _generate_curriculum,
     validate_and_fix_curriculum,
@@ -1039,7 +1039,7 @@ async def copilot_message(request: CopilotRequest, tsp_client: TSPClient = Depen
             lesson_id=c.get("lesson_id"),
             module_name=c.get("module_name"),
             lesson_name=c.get("lesson_name"),
-            excerpt=c["chunk_text"][:200] + "..." if len(c["chunk_text"]) > 200 else c["chunk_text"],
+            excerpt=clean_chunk_excerpt(c["chunk_text"], max_len=250),
             similarity_score=round(c["similarity"], 3)
         )
         for c in chunks

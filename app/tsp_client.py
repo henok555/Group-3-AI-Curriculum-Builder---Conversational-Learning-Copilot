@@ -372,15 +372,22 @@ class TSPClient:
             return {}
 
     async def get_accepted_content(self, training_id: str) -> list[dict]:
-        """Get all ACCEPTED content for a training (for RAG indexing)."""
+        """Get all ACCEPTED content for a training (for RAG indexing), enriched with module & lesson learning content."""
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT c.*, m.name as module_name, m.module_order,
-                       l.name as lesson_name
+                SELECT c.*, 
+                       m.name as module_name, 
+                       m.description as module_description,
+                       m.key_concepts as module_key_concepts,
+                       m.teaching_strategy as module_teaching_strategy,
+                       m.module_order,
+                       l.name as lesson_name,
+                       l.description as lesson_description,
+                       l.objective as lesson_objective
                 FROM contents c
                 JOIN modules m ON m.id = c.module_id
                 LEFT JOIN lessons l ON l.id = c.lesson_id
-                WHERE m.training_id = $1 AND c.status = 'ACCEPTED'
+                WHERE m.training_id = $1::uuid AND c.status = 'ACCEPTED'
                 ORDER BY m.module_order, c.level, c.created_at
             """, training_id)
             return [dict(r) for r in rows]

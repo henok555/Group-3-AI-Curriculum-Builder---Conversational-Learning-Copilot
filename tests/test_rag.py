@@ -86,3 +86,11 @@ def test_extract_text_from_link_invalid_url():
     # Non-existent local file or malformed link returns None gracefully
     assert extract_text_from_link("") is None
     assert extract_text_from_link("non_existent_file_path_12345.pdf") is None
+
+
+def test_clean_chunk_excerpt_strips_headers_and_labels():
+    from app.retrieval import clean_chunk_excerpt
+    raw = "[Training: Leyu Facilitators | Module: ToT | Lesson: Intro | Level: MODULE]\n\nTitle: Facilitator Guide\nSummary: Active learning facilitation strategies.\nDetailed Learning Material:\nAdult learners retain 80% through interactive exercises."
+    cleaned = clean_chunk_excerpt(raw, max_len=100)
+    assert "[Training:" not in cleaned
+    assert "Active learning facilitation" in cleaned or "Adult learners" in cleaned

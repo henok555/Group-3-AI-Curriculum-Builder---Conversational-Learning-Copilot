@@ -16,6 +16,7 @@ import asyncio
 import argparse
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -191,8 +192,8 @@ async def run_evaluation(
                 "latency_ms": lat_ms,
             })
 
-            status = "✓ REJECTED (Safe)" if is_correctly_rejected else f"✗ LEAKED ({len(chunks)} chunks, sim={top_sim:.3f})"
-            print(f"  [{item['id']}] '{item['question'][:45]}...' → {status}")
+            status = "[OK] REJECTED (Safe)" if is_correctly_rejected else f"[FAIL] LEAKED ({len(chunks)} chunks, sim={top_sim:.3f})"
+            print(f"  [{item['id']}] '{item['question'][:45]}...' -> {status}")
 
     # Aggregate Metrics
     avg_precision = sum(r["precision_at_k"] for r in supported_results) / len(supported_results) if supported_results else 0.0
@@ -210,26 +211,28 @@ async def run_evaluation(
 
     return {
         "training_id": training_id,
-        "embedder_info": embedder_info,
-        "total_chunks": total_chunks,
-        "supported_results": supported_results,
-        "unsupported_results": unsupported_results,
+        "active_embedder": embedder_info["name"],
+        "is_real_embedder": embedder_info["is_real"],
+        "top_k": top_k,
+        "similarity_threshold": similarity_threshold,
         "avg_precision": avg_precision,
         "mrr": mrr,
         "refusal_accuracy": refusal_accuracy,
-        "avg_latency": avg_latency,
+        "avg_latency_ms": avg_latency,
+        "supported_results": supported_results,
+        "unsupported_results": unsupported_results,
     }
 
 
-def generate_markdown_report(report_data: Dict[str, Any]) -> str:
+def generate_markdown_report(report_data: dict) -> str:
     """Generate structured markdown results report."""
-    md = f"""# Quantitative Evaluation Results — TSP RAG & Copilot Engine
+    md = f"""# Quantitative Evaluation Results -- TSP RAG & Copilot Engine
 
-**Date:** 2026-09-20  
+**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  
 **Evaluator:** Teammate 3 (RAG Pipeline & Copilot Architect)  
 **Evaluation Training ID:** `{report_data['training_id']}`  
-**Embedder:** `{report_data['embedder_info']['name']}` (Real MiniLM: `{report_data['embedder_info']['is_real']}`)  
-**Total Chunks in Index:** {report_data['total_chunks']}  
+**Embedder:** `{report_data['active_embedder']}` (Real MiniLM: `{report_data['is_real_embedder']}`)  
+**Top-K:** {report_data['top_k']} | **Similarity Threshold:** {report_data['similarity_threshold']}  
 
 ---
 
@@ -237,16 +240,16 @@ def generate_markdown_report(report_data: Dict[str, Any]) -> str:
 
 | Metric | Measured Value | Standard Target | Status |
 |---|---|---|---|
-| **Mean Precision@5** | **{report_data['avg_precision']:.2f}** | ≥ 0.60 | {'✅ PASS' if report_data['avg_precision'] >= 0.6 else '⚠️ REVIEW'} |
-| **Mean Reciprocal Rank (MRR)** | **{report_data['mrr']:.2f}** | ≥ 0.50 | {'✅ PASS' if report_data['mrr'] >= 0.5 else '⚠️ REVIEW'} |
-| **Unsupported Refusal Accuracy** | **{report_data['refusal_accuracy']:.1f}%** | 100.0% | {'✅ PASS' if report_data['refusal_accuracy'] == 100.0 else '⚠️ REVIEW'} |
-| **Average Query Latency** | **{report_data['avg_latency']:.1f} ms** | < 3000 ms | ✅ PASS |
+| **Mean Precision@{report_data['top_k']}** | **{report_data['avg_precision']:.2f}** | >= 0.60 | {'PASS' if report_data['avg_precision'] >= 0.6 else 'REVIEW'} |
+| **Mean Reciprocal Rank (MRR)** | **{report_data['mrr']:.2f}** | >= 0.50 | {'PASS' if report_data['mrr'] >= 0.5 else 'REVIEW'} |
+| **Unsupported Refusal Accuracy** | **{report_data['refusal_accuracy']:.1f}%** | 100.0% | {'PASS' if report_data['refusal_accuracy'] == 100.0 else 'REVIEW'} |
+| **Average Query Latency** | **{report_data['avg_latency_ms']:.1f} ms** | < 3000 ms | PASS |
 
 ---
 
 ## 2. Domain-Supported Question Evaluation Set
 
-| ID | Benchmark Question | Chunks Retrieved | Precision@5 | Reciprocal Rank | Top Sim | Top Source |
+| ID | Benchmark Question | Chunks Retrieved | Precision@{report_data['top_k']} | Reciprocal Rank | Top Sim | Top Source |
 |---|---|---|---|---|---|---|
 """
     for r in report_data["supported_results"]:
@@ -261,7 +264,7 @@ def generate_markdown_report(report_data: Dict[str, Any]) -> str:
 |---|---|---|---|---|---|
 """
     for u in report_data["unsupported_results"]:
-        status = "✅ Correctly Refused (0 chunks)" if u["correctly_rejected"] else f"❌ Leaked ({u['chunks_retrieved']} chunks)"
+        status = "Correctly Refused (0 chunks)" if u["correctly_rejected"] else f"Leaked ({u['chunks_retrieved']} chunks)"
         md += f"| {u['id']} | {u['question']} | {u['reason']} | {u['chunks_retrieved']} | {u['top_similarity']:.3f} | {status} |\n"
 
     md += """
@@ -302,7 +305,7 @@ async def main():
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(md_content, encoding="utf-8")
-        print(f"✓ Saved evaluation report to {args.output}")
+        print(f"[OK] Saved evaluation report to {args.output}")
 
 
 if __name__ == "__main__":

@@ -51,31 +51,32 @@
 | TSP Field | Table | Indexed Into `ai_content_chunks` |
 |---|---|---|
 | `id` | `contents` | `content_id` — primary FK |
-| `name` | `contents` | Prepended to chunk text for keyword coverage |
-| `description` | `contents` | Primary chunk text source |
-| `file_type` | `contents` | Stored as metadata, returned in sources |
+| `name` | `contents` | Resource title in chunk body |
+| `description` | `contents` | Resource summary text |
+| `link` | `contents` | PDF / external document full text extracted via `pypdf` |
+| `key_concepts` | `modules` | Module key learning concepts & frameworks (e.g. 4Es) |
+| `teaching_strategy` | `modules` | Instructional & facilitation strategies |
+| `objective` | `lessons` | Lesson-specific learning goals & competencies |
+| `description` | `lessons` | Lesson-specific instructional details |
+| `file_type` | `contents` | Stored as metadata, returned in source attribution |
 | `level` | `contents` | `MODULE` / `LESSON` / `ASSESSMENT` (filter option) |
 | `status = 'ACCEPTED'` | `contents` | **Filter** — only accepted content is indexed |
-| `module_id` | `contents` | Attribution: which module a chunk came from |
-| `lesson_id` | `contents` | Attribution: which lesson (nullable) |
-| `link` | `contents` | Google Drive URL — PDF text extraction future work |
+| `module_id` | `contents` | Attribution & filter: which module a chunk came from |
+| `lesson_id` | `contents` | Attribution & filter: which lesson (nullable) |
 
 ## Output Mapping (AI → TSP)
 
 | AI Service Output | Stored In | Notes |
 |---|---|---|
-| Generated curriculum (dict) | `ai_responses.output` | Existing TSP table; full JSON blob |
-| Generation prompt | `ai_responses.prompt` | For auditability |
-| `request_type = 'GENERATED_CURRICULUM'` | `ai_responses.request_type` | Distinguishes AI outputs |
+| Generated curriculum (dict) | `ai_generated_curricula.curriculum_json` | AI-service table; full JSONB blob |
 | Embedded content chunks | `ai_content_chunks.embedding` | `float[]` array, service-owned table |
+| Copilot session history | In-memory session store & DB | Preserves multi-turn dialogue |
 
 ## Fields NOT Currently Used (Identified, Not Wired)
 
 | Field | Table | Reason |
 |---|---|---|
-| `assessment_sections`, `assessment_entries` | `assessments.*` | Demo training has 0 assessments |
-| `survey_sections`, `survey_entries` | `surveys.*` | Demo training has 0 surveys |
-| `link` (PDF URL) | `contents` | PDF text extraction not implemented; only name+description indexed |
-| `time_to_read_minutes` | `contents` | Could inform chunk count or reading time estimates |
-| `cohort_id` / session data | `cohorts`, `sessions` | Not needed for curriculum generation or retrieval |
-| Trainee progress / attendance | (not found in schema) | Would enable stronger personalization |
+| `assessment_sections`, `assessment_entries` | `assessments.*` | Seed demo training has 0 pre-existing assessments |
+| `survey_sections`, `survey_entries` | `surveys.*` | Seed demo training has 0 pre-existing surveys |
+| `time_to_read_minutes` | `contents` | Informational reading estimate |
+| `cohort_id` / session data | `cohorts`, `sessions` | Not required for curriculum generation or RAG search |

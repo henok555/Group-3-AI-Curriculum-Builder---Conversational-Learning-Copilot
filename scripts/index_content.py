@@ -94,22 +94,30 @@ async def index_training_content(
             try:
                 extracted_text = extract_text_from_link(link) or ""
                 if extracted_text:
-                    print(f"  ✓ Extracted {len(extracted_text.split())} words from document: {name} ({file_type})")
+                    print(f"  [OK] Extracted {len(extracted_text.split())} words from document: {name} ({file_type})")
             except Exception as e:
-                print(f"  ⚠ Failed link extraction for {name}: {e}")
+                print(f"  [WARN] Failed link extraction for {name}: {e}")
 
-        # Combine document text with metadata descriptions
+        # Combine module concepts, lesson objectives, and document text
         text_components = []
+        if content.get("module_key_concepts"):
+            text_components.append(f"Module Key Concepts: {content['module_key_concepts']}")
+        if content.get("module_teaching_strategy"):
+            text_components.append(f"Teaching & Facilitation Strategy: {content['module_teaching_strategy']}")
+        if content.get("lesson_objective"):
+            text_components.append(f"Lesson Objective: {content['lesson_objective']}")
+        if content.get("lesson_description"):
+            text_components.append(f"Lesson Description: {content['lesson_description']}")
         if name:
-            text_components.append(f"Title: {name}")
+            text_components.append(f"Resource Title: {name}")
         if description:
-            text_components.append(f"Summary: {description}")
+            text_components.append(f"Resource Summary: {description}")
         if extracted_text:
-            text_components.append(f"Detailed Content:\n{extracted_text}")
+            text_components.append(f"Detailed Learning Material:\n{extracted_text}")
 
         combined_text = "\n\n".join(text_components).strip()
         if not combined_text:
-            print(f"  ⚠ SKIP {content_id} ({name}) — no text available")
+            print(f"  [SKIP] {content_id} ({name}) -- no text available")
             continue
 
         # Hierarchical context header
@@ -173,7 +181,7 @@ async def index_training_content(
 
     total_in_db = await client.count_training_chunks(training_id)
     duration = round(time.time() - start_time, 2)
-    print(f"  ✓ Finished [{training_id[:8]}]: {total_chunks_for_training} chunk(s) indexed in {duration}s. (Total in DB: {total_in_db})")
+    print(f"  [OK] Finished [{training_id[:8]}]: {total_chunks_for_training} chunk(s) indexed in {duration}s. (Total in DB: {total_in_db})")
 
     return {
         "training_id": training_id,

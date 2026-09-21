@@ -21,6 +21,8 @@ env/
 data/
 *.json
 !docs/*.json
+*.sql
+!docs/*.sql
 
 # Sentence-transformers model cache
 .cache/

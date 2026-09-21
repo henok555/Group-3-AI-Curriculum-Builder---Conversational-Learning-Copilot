@@ -285,6 +285,23 @@ def extract_text_from_link(link: str, timeout: int = 10) -> Optional[str]:
     return None
 
 
+def clean_chunk_excerpt(chunk_text: str, max_len: int = 250) -> str:
+    """
+    Extract a clean, readable content snippet from a chunk by stripping
+    hierarchical metadata headers and label prefixes.
+    """
+    if not chunk_text:
+        return ""
+    # Strip leading [Training: ... ] header if present
+    cleaned = re.sub(r"^\[Training:[^\]]+\]\s*", "", chunk_text.strip())
+    # Clean redundant label prefixes for cleaner human display
+    cleaned = re.sub(r"^(?:Module Key Concepts|Teaching & Facilitation Strategy|Lesson Objective|Lesson Description|Resource Title|Resource Summary|Detailed Learning Material|Title|Summary|Detailed Content):\s*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"\n{2,}", " ", cleaned).strip()
+    if not cleaned:
+        cleaned = chunk_text.strip()
+    return cleaned[:max_len] + "..." if len(cleaned) > max_len else cleaned
+
+
 async def retrieve_relevant_chunks(
     tsp_client,          # TSPClient instance
     query: str,
