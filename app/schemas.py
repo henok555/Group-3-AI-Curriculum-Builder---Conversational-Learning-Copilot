@@ -672,8 +672,25 @@ class CopilotRequest(BaseModel):
     training_id: str
     learner_id: Optional[str] = None
     question: str = Field(min_length=1, max_length=2000)
+    # Server-side multi-turn context: pass the session_id returned by a previous
+    # response to continue that conversation. Omit to start a new session.
+    session_id: Optional[str] = Field(default=None, max_length=64)
+    # Legacy client-supplied history — used only when no server-side session exists.
     conversation_history: List[Dict[str, str]] = Field(default_factory=list)
     max_sources: int = Field(default=5, ge=1, le=20)
+
+
+class NextActivityRecommendation(BaseModel):
+    """Deterministic, evidence-grounded next-activity recommendation."""
+    activity: str
+    reason: str
+
+
+class PersonalizationInfo(BaseModel):
+    """How the copilot adapted this answer to the learner."""
+    tier: str
+    performance_level: str = "no_evidence"
+    evidence_summary: Optional[str] = None
 
 
 class CopilotResponse(BaseModel):
@@ -684,6 +701,9 @@ class CopilotResponse(BaseModel):
     guardrail_triggered: bool = False
     guardrail_reason: Optional[str] = None
     embedder: str = "minilm"
+    session_id: Optional[str] = None
+    personalization: Optional[PersonalizationInfo] = None
+    recommended_next_activity: Optional[NextActivityRecommendation] = None
 
 
 class HealthResponse(BaseModel):

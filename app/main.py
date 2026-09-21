@@ -29,6 +29,7 @@ from app.schemas import (
     CurriculumRegenerateRequest, CurriculumHistoryEntry,
     DraftEnhanceRequest, DraftEnhanceResponse,
     CopilotRequest, CopilotResponse, SourceAttribution, HealthResponse,
+    NextActivityRecommendation, PersonalizationInfo,
     # TSP source models (used for type hints in prompt building)
     LearnerProfile,
     # AI-generated models
@@ -36,6 +37,7 @@ from app.schemas import (
     Rubric, RubricCriterion,
 )
 from app.llm import call_gemma, LLMError, test_gemma_connection
+from app.session_store import session_store
 from app.retrieval import retrieve_relevant_chunks, get_embedder_info, get_embedder_name
 from app.curriculum_builder import (
     generate_curriculum as _generate_curriculum,
@@ -177,16 +179,145 @@ def derive_learner_pedagogy(learner_profile: Optional[dict]) -> dict:
     }
 
 
-def get_personalized_copilot_system_prompt(learner_profile: Optional[dict]) -> str:
-    """Build a personalized system prompt tailored to the specific learner's background."""
+def derive_performance_adaptation(progress: Optional[dict]) -> dict:
+    """
+    Turn real TSP learner evidence (attendance + assessment scores) into an
+    adaptation directive. Evidence comes from TSPClient.get_learner_progress();
+    when no evidence exists in TSP we say so explicitly rather than guessing.
+
+    Levels:
+    - struggling: overall assessment < 50% or attendance rate < 60%
+    - excelling:  overall assessment >= 80% and attendance rate >= 90% (when recorded)
+    - on_track:   everything else with evidence
+    - no_evidence: no attendance or assessment records in TSP
+    """
+    if not progress:
+        return {
+            "level": "no_evidence",
+            "summary": "No attendance or assessment records found in TSP for this learner.",
+            "strategy": "Personalize using background profile only; do not assume any past performance.",
+        }
+
+    att = progress.get("attendance") or {}
+    rate = att.get("rate")
+    overall = progress.get("overall_assessment_pct")
+    weakest = progress.get("weakest_assessment")
+
+    parts = []
+    if att.get("recorded"):
+        parts.append(f"attended {att['attended']}/{att['recorded']} recorded sessions ({int((rate or 0) * 100)}%)")
+    if overall is not None:
+        parts.append(f"overall assessment score {overall}%")
+    if weakest and weakest.get("score_pct") is not None:
+        parts.append(f"weakest area: \"{weakest['assessment_name']}\" at {weakest['score_pct']}%")
+    summary = "Learner evidence from TSP: " + "; ".join(parts) + "." if parts else \
+        "Learner has TSP records but no scored evidence yet."
+
+    struggling = (overall is not None and overall < 50) or (rate is not None and rate < 0.6)
+    excelling = (overall is not None and overall >= 80) and (rate is None or rate >= 0.9)
+
+    if struggling:
+        return {
+            "level": "struggling",
+            "summary": summary,
+            "strategy": (
+                "The learner is struggling based on TSP evidence. Provide remedial support: slow down, "
+                "re-explain prerequisites before answering, use the simplest correct framing, and "
+                "explicitly encourage them. Point them back to foundational lessons related to their weakest area."
+            ),
+        }
+    if excelling:
+        return {
+            "level": "excelling",
+            "summary": summary,
+            "strategy": (
+                "The learner is excelling based on TSP evidence. Skip basics, add depth, edge cases, and "
+                "stretch challenges. Frame answers at peer level and suggest they help or coach others."
+            ),
+        }
+    return {
+        "level": "on_track",
+        "summary": summary,
+        "strategy": (
+            "The learner is on track. Reinforce what is working, answer at the tier level, and nudge them "
+            "toward steady progression through the remaining sessions."
+        ),
+    }
+
+
+def recommend_next_activity(
+    progress: Optional[dict],
+    pedagogy: dict,
+    performance: Optional[dict] = None,
+) -> dict:
+    """
+    Deterministic, evidence-grounded next-activity recommendation with an
+    explicit "why". Built in code from TSP records — never hallucinated by the
+    LLM — and passed into the prompt so the answer can reference it.
+    """
+    performance = performance or derive_performance_adaptation(progress)
+
+    if progress:
+        weakest = progress.get("weakest_assessment")
+        next_session = progress.get("next_session")
+        last = progress.get("last_attended_session")
+
+        if performance["level"] == "struggling" and weakest and weakest.get("score_pct") is not None:
+            return {
+                "activity": f"Review the training materials covered by \"{weakest['assessment_name']}\" and retake its knowledge checks.",
+                "reason": (
+                    f"Your TSP assessment record shows this is your weakest area ({weakest['score_pct']}%), "
+                    "so strengthening it first will unblock the rest of the curriculum."
+                ),
+            }
+        if next_session:
+            reason = f"TSP shows this is the next session in your cohort schedule ({next_session['start_date'][:10]})"
+            if last:
+                reason += f", following \"{last['name']}\" which you already attended"
+            return {
+                "activity": f"Attend \"{next_session['name']}\".",
+                "reason": reason + ".",
+            }
+        if performance["level"] == "excelling":
+            return {
+                "activity": "Take on an advanced practical assignment or peer-coaching exercise from your completed modules.",
+                "reason": (
+                    f"You have attended all recorded sessions and your overall assessment score is "
+                    f"{progress.get('overall_assessment_pct')}%, so stretch work is the best next step."
+                ),
+            }
+        if last:
+            return {
+                "activity": f"Review and consolidate the material from \"{last['name']}\", then complete its practical exercise.",
+                "reason": "TSP shows you have attended all scheduled sessions; consolidation is the highest-value next step.",
+            }
+
+    # No TSP evidence — fall back to the tier-based hint, and say why honestly.
+    return {
+        "activity": pedagogy.get("recommendation_hint", "Continue with the next lesson in your curriculum."),
+        "reason": "No attendance or assessment records were found in TSP for you yet, so this suggestion is based on your background profile.",
+    }
+
+
+def get_personalized_copilot_system_prompt(
+    learner_profile: Optional[dict],
+    progress: Optional[dict] = None,
+) -> str:
+    """Build a personalized system prompt tailored to the learner's background and TSP evidence."""
     pedagogy = derive_learner_pedagogy(learner_profile)
-    
+    performance = derive_performance_adaptation(progress)
+
     persona_block = f"""
 LEARNER PEDAGOGICAL ADAPTATION:
 - Target Learner Tier: {pedagogy['tier']}
 - Communication Tone: {pedagogy['tone']}
 - Instructional Strategy: {pedagogy['guidance']}
 - Next Activity Strategy: {pedagogy['recommendation_hint']}
+
+PERFORMANCE-BASED ADAPTATION (from real TSP records):
+- Performance Level: {performance['level']}
+- Evidence: {performance['summary']}
+- Adaptation Directive: {performance['strategy']}
 """
     return f"{BASE_COPILOT_SYSTEM_PROMPT}\n{persona_block}"
 
@@ -195,7 +326,9 @@ def build_copilot_prompt(
     question: str,
     learner_profile: Optional[dict],
     chunks: List[dict],
-    conversation_history: List[Dict[str, str]]
+    conversation_history: List[Dict[str, str]],
+    progress: Optional[dict] = None,
+    next_activity: Optional[dict] = None,
 ) -> str:
     """Build the copilot prompt with grounded context, learner profile, and conversation history."""
     context_parts = []
@@ -228,7 +361,32 @@ LEARNER PROFILE:
 - Language: {learner_profile.get('language_name', 'English')}
 - Assigned Pedagogical Tier: {pedagogy['tier']}
 """
-    
+
+    progress_block = ""
+    if progress:
+        att = progress.get("attendance") or {}
+        lines = []
+        if att.get("recorded"):
+            lines.append(f"- Attendance: {att['attended']}/{att['recorded']} sessions attended")
+        if progress.get("last_attended_session"):
+            lines.append(f"- Last attended session: {progress['last_attended_session']['name']}")
+        if progress.get("next_session"):
+            lines.append(f"- Next scheduled session: {progress['next_session']['name']}")
+        if progress.get("overall_assessment_pct") is not None:
+            lines.append(f"- Overall assessment score: {progress['overall_assessment_pct']}%")
+        for a in (progress.get("assessment_results") or [])[:3]:
+            if a.get("score_pct") is not None:
+                lines.append(f"- Assessment \"{a['assessment_name']}\": {a['score_pct']}% ({a['answers']} answers)")
+        if lines:
+            progress_block = "LEARNER PROGRESS EVIDENCE (from TSP records):\n" + "\n".join(lines) + "\n"
+
+    next_activity_block = ""
+    if next_activity:
+        next_activity_block = f"""RECOMMENDED NEXT ACTIVITY (computed from TSP records — do not change it):
+- Activity: {next_activity['activity']}
+- Why: {next_activity['reason']}
+"""
+
     history_block = ""
     if conversation_history:
         history_lines = []
@@ -241,7 +399,7 @@ LEARNER PROFILE:
             history_block = "CONVERSATION HISTORY:\n" + "\n".join(history_lines) + "\n"
     
     return f"""{learner_info}
-{history_block}
+{progress_block}{next_activity_block}{history_block}
 GROUNDED TSP TRAINING CONTENT:
 {context}
 
@@ -250,9 +408,11 @@ LEARNER QUESTION:
 
 INSTRUCTIONS FOR YOUR RESPONSE:
 1. Answer the question accurately using ONLY the grounded content above.
-2. Adapt your tone, vocabulary, and explanation complexity to the learner's assigned pedagogical tier.
+2. Adapt your tone, vocabulary, and explanation complexity to the learner's assigned pedagogical tier,
+   and follow the performance-based adaptation directive when progress evidence is present.
 3. Explicitly cite sources in-line or at the end using [Module: <Name>, Lesson: <Name>].
-4. Suggest a relevant next learning activity (e.g. lesson, assignment, or quiz) aligned with the learner's level.
+4. If a RECOMMENDED NEXT ACTIVITY is provided above, close your answer by recommending exactly that
+   activity together with its stated reason. Otherwise suggest a next activity aligned with the learner's level.
 
 ANSWER:"""
 
@@ -756,36 +916,75 @@ async def get_curriculum_history(
 
 @app.post("/copilot/message", response_model=CopilotResponse)
 async def copilot_message(request: CopilotRequest, tsp_client: TSPClient = Depends(get_tsp_client)):
-    """Process a copilot message."""
+    """Process a copilot message with server-side sessions and evidence-based personalization."""
     active_embedder = get_embedder_name()
+
+    # --- Session resolution (Teammate 4): server-side multi-turn context ---
+    session_id = request.session_id or session_store.new_session_id()
+    if request.session_id and not session_store.has(session_id):
+        # Cold start after restart: hydrate from ai_copilot_sessions if persisted.
+        db_history = await tsp_client.get_copilot_session_history(session_id)
+        session_store.hydrate(session_id, db_history)
+    server_history = session_store.get(session_id)
+    # Server-side history wins; legacy client-supplied history is a fallback only.
+    conversation_history = server_history if server_history else request.conversation_history
+
+    async def record_exchange(answer_text: str, guardrail: bool = False) -> None:
+        """Store both turns in memory and persist best-effort to TSP."""
+        session_store.append(session_id, "learner", request.question)
+        session_store.append(session_id, "copilot", answer_text)
+        await tsp_client.save_copilot_turn(
+            session_id, request.training_id, request.learner_id,
+            "learner", request.question, guardrail_triggered=guardrail)
+        await tsp_client.save_copilot_turn(
+            session_id, request.training_id, request.learner_id,
+            "copilot", answer_text, guardrail_triggered=guardrail)
 
     # Guardrail: 2-Layer Injection Check
     injected, reason = await check_llm_injection(request.question)
     if injected:
+        answer_text = "I can't process that request. It appears to contain instructions that override my guidelines."
+        await record_exchange(answer_text, guardrail=True)
         return CopilotResponse(
-            answer="I can't process that request. It appears to contain instructions that override my guidelines.",
+            answer=answer_text,
             sources=[],
             confidence=0.0,
             guardrail_triggered=True,
             guardrail_reason=reason,
             embedder=active_embedder,
+            session_id=session_id,
         )
-    
-    # Fetch learner profile if provided and check cross-training authorization
+
+    # Fetch learner profile + progress evidence if provided; check cross-training authorization
     learner_profile = None
+    learner_progress = None
     if request.learner_id:
         is_enrolled = await tsp_client.is_learner_enrolled(request.learner_id, request.training_id)
         if not is_enrolled:
+            answer_text = "Access denied: You are not enrolled in this training program."
+            await record_exchange(answer_text, guardrail=True)
             return CopilotResponse(
-                answer="Access denied: You are not enrolled in this training program.",
+                answer=answer_text,
                 sources=[],
                 confidence=0.0,
                 guardrail_triggered=True,
                 guardrail_reason=f"Unauthorized cross-training access attempt: learner {request.learner_id} is not enrolled in training {request.training_id}",
                 embedder=active_embedder,
+                session_id=session_id,
             )
         learner_profile = await tsp_client.get_learner_profile(request.learner_id)
-    
+        learner_progress = await tsp_client.get_learner_progress(request.learner_id, request.training_id)
+
+    # Derive personalization from profile + real TSP evidence
+    pedagogy = derive_learner_pedagogy(learner_profile)
+    performance = derive_performance_adaptation(learner_progress)
+    next_activity = recommend_next_activity(learner_progress, pedagogy, performance) if request.learner_id else None
+    personalization = PersonalizationInfo(
+        tier=pedagogy["tier"],
+        performance_level=performance["level"],
+        evidence_summary=performance["summary"],
+    ) if request.learner_id else None
+
     # Retrieve relevant chunks
     chunks = await retrieve_relevant_chunks(
         tsp_client,
@@ -794,25 +993,32 @@ async def copilot_message(request: CopilotRequest, tsp_client: TSPClient = Depen
         top_k=request.max_sources,
         similarity_threshold=0.3
     )
-    
+
     # Check if we have relevant content
     if not chunks:
+        answer_text = "I don't have that information in the training materials."
+        await record_exchange(answer_text)
         return CopilotResponse(
-            answer="I don't have that information in the training materials.",
+            answer=answer_text,
             sources=[],
             confidence=0.0,
             embedder=active_embedder,
+            session_id=session_id,
+            personalization=personalization,
+            recommended_next_activity=NextActivityRecommendation(**next_activity) if next_activity else None,
         )
-    
+
     # Build prompt
     prompt = build_copilot_prompt(
         request.question,
         learner_profile,
         chunks,
-        request.conversation_history
+        conversation_history,
+        progress=learner_progress,
+        next_activity=next_activity,
     )
-    
-    personalized_system_prompt = get_personalized_copilot_system_prompt(learner_profile)
+
+    personalized_system_prompt = get_personalized_copilot_system_prompt(learner_profile, learner_progress)
 
     # Call LLM
     try:
@@ -824,7 +1030,7 @@ async def copilot_message(request: CopilotRequest, tsp_client: TSPClient = Depen
         )
     except LLMError as e:
         raise HTTPException(500, f"LLM generation failed: {e}")
-    
+
     # Build source attributions
     sources = [
         SourceAttribution(
@@ -838,15 +1044,20 @@ async def copilot_message(request: CopilotRequest, tsp_client: TSPClient = Depen
         )
         for c in chunks
     ]
-    
+
     # Confidence based on top similarity
     confidence = chunks[0]["similarity"] if chunks else 0.0
-    
+
+    await record_exchange(answer.strip())
+
     return CopilotResponse(
         answer=answer.strip(),
         sources=sources,
         confidence=round(confidence, 3),
         embedder=active_embedder,
+        session_id=session_id,
+        personalization=personalization,
+        recommended_next_activity=NextActivityRecommendation(**next_activity) if next_activity else None,
     )
 
 

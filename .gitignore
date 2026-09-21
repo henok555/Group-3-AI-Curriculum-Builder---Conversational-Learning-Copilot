@@ -8,6 +8,7 @@ dist/
 build/
 
 # Virtual environments
+.venv
 .venv/
 venv/
 env/
@@ -38,3 +39,5 @@ Thumbs.db
 *.log
 
 resources
+
+.claude/
