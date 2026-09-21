@@ -1,6 +1,6 @@
 # Quantitative Evaluation Results -- TSP RAG & Copilot Engine
 
-**Date:** 2026-09-21 22:34:03  
+**Date:** 2026-09-21 23:51:52  
 **Evaluator:** Teammate 3 (RAG Pipeline & Copilot Architect)  
 **Evaluation Training ID:** `45d3c920-abd2-4c4e-8fdf-497b9a6dd9fc`  
 **Embedder:** `minilm` (Real MiniLM: `True`)  
@@ -15,7 +15,7 @@
 | **Mean Precision@5** | **0.88** | >= 0.60 | PASS |
 | **Mean Reciprocal Rank (MRR)** | **1.00** | >= 0.50 | PASS |
 | **Unsupported Refusal Accuracy** | **100.0%** | 100.0% | PASS |
-| **Average Query Latency** | **323.6 ms** | < 3000 ms | PASS |
+| **Average Query Latency** | **48.1 ms** | < 3000 ms | PASS |
 
 ---
 
