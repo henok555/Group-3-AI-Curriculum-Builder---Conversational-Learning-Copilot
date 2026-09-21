@@ -65,3 +65,40 @@
 ### 5. Quantitative Evaluation Suite & Automated Testing (`scripts/evaluate_retrieval.py` & `tests/test_rag.py`)
 * **Automated Evaluation Benchmark**: Developed `scripts/evaluate_retrieval.py` calculating Mean Precision@5, Mean Reciprocal Rank (MRR), and Out-of-Domain Refusal Accuracy.
 * **Comprehensive Test Suite**: Authored `tests/test_rag.py` covering sentence splitting, semantic chunking, cosine similarity properties, embedder normalization, and extraction error resilience (100% test pass rate).
+
+---
+
+# Individual Contribution Statement — Copilot Sessions & Evidence-Based Personalization
+
+**Name**: Abel (Teammate 4)
+**Role**: Conversational Copilot — Multi-Turn Context, Learner Profiling, Performance-Based Personalization, Next-Activity Engine
+**Grading areas fed**: RAG/Copilot (12%, shared) + Learner Profiling & Personalization (8%)
+
+---
+
+## Technical Accomplishments
+
+### 1. Server-Side Multi-Turn Session Architecture (`app/session_store.py`, `app/tsp_client.py`, `docs/db_migrations.sql`)
+* Designed and built a two-layer conversation memory: an in-memory `SessionStore` (20-turn window, per-session isolation) backed by a new `ai_copilot_sessions` PostgreSQL table (one row per turn, indexed by session and by learner).
+* `POST /copilot/message` now accepts and returns a `session_id` — clients continue conversations without re-sending history; sessions survive service restarts through DB hydration (`get_copilot_session_history`).
+* Persistence is best-effort by design: a missing table or failed write degrades gracefully to memory-only, never breaking answering. Guardrail refusals are also recorded so multi-turn context stays faithful.
+* Implemented `get_recent_learner_interactions()` — the learner's previous copilot interactions across sessions, a required learner-profile element.
+
+### 2. Evidence-Based Learner Progress Aggregation (`TSPClient.get_learner_progress`)
+* Aggregates real TSP evidence per learner: attendance rate from `attendances`/`sessions`, cohort session timeline (last attended + next unattended session), and **weight-normalized** assessment percentages (`Σ score / Σ weight`) from `assessment_answers` → `assessment_entries` → `assessments`, including the weakest assessment area.
+* Resolves `learner_id` as either `trainee.id` or `user.id` within the training; returns `{}` when no evidence exists so nothing downstream can fabricate progress.
+
+### 3. Performance-Adaptive Personalization (`derive_performance_adaptation` in `app/main.py`)
+* Layered a data-driven performance dimension (struggling / on_track / excelling / no_evidence, with explicit thresholds) on top of the demographic 3-tier system, satisfying the assignment's "personalization must be based on actual learner evidence from TSP, not only prompt wording".
+* Struggling learners get remedial framing pointed at their actual weakest assessment area; excelling learners get depth and stretch work; the evidence summary and adaptation directive are injected into both system and user prompts and surfaced in a structured `personalization` response field.
+
+### 4. Deterministic Next-Activity Recommendation Engine (`recommend_next_activity` in `app/main.py`)
+* Computes the recommended next activity **in code from TSP records** — never hallucinated by the LLM — with an explicit "why" citing real scores, schedule dates, and attendance (assignment: "Recommend the next learning activity" + "Explain why an activity is recommended").
+* Five-rule decision order: remediate weakest area → attend next scheduled cohort session → stretch work when excelling → consolidate when schedule complete → honest profile-only fallback when TSP holds no evidence.
+
+### 5. Personalization, Multi-Turn & Safety Evaluation (`scripts/evaluate_personalization.py`, `tests/test_copilot.py`)
+* Built the live evaluation required of Teammate 4 by `docs/evaluation_plan.md`: same question asked as 3 real learners (distinct academic levels) with pairwise Jaccard differentiation scoring; multi-turn coherence verified against both the in-memory store and `ai_copilot_sessions`; safety suite re-verifying injection blocking, honest refusal, and cross-training access denial — results written to `docs/evaluation_personalization.md`.
+* Authored `tests/test_copilot.py` — 18 unit tests (no DB/LLM required) covering performance thresholds, recommendation decision order, session round-trip/isolation/trimming/hydration, prompt assembly, and injection-pattern regression.
+
+### 6. Documentation (`docs/copilot_personalization.md`)
+* Full design specification: session architecture, TSP-evidence data mapping, adaptation rules, API changes, evaluation methodology, and known limitations.

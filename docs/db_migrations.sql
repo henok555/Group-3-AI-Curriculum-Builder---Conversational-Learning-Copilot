@@ -37,7 +37,26 @@ CREATE TABLE IF NOT EXISTS ai_generated_curricula (
 
 CREATE INDEX IF NOT EXISTS idx_ai_curricula_training ON ai_generated_curricula(training_id);
 
+-- Table 3: Copilot session persistence (Teammate 4 — multi-turn context)
+-- One row per conversation turn. Durable across service restarts; the
+-- copilot degrades gracefully to in-memory sessions if this table is absent.
+CREATE TABLE IF NOT EXISTS ai_copilot_sessions (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id          VARCHAR(64) NOT NULL,
+    training_id         UUID NOT NULL,
+    learner_id          UUID,
+    role                VARCHAR(16) NOT NULL CHECK (role IN ('learner', 'copilot')),
+    content             TEXT NOT NULL,
+    guardrail_triggered BOOLEAN DEFAULT FALSE,
+    created_at          TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_copilot_sessions_sid     ON ai_copilot_sessions(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_copilot_sessions_learner ON ai_copilot_sessions(learner_id, created_at);
+
 -- Verify
 SELECT 'ai_content_chunks'    AS table_name, COUNT(*) AS rows FROM ai_content_chunks
 UNION ALL
-SELECT 'ai_generated_curricula', COUNT(*) FROM ai_generated_curricula;
+SELECT 'ai_generated_curricula', COUNT(*) FROM ai_generated_curricula
+UNION ALL
+SELECT 'ai_copilot_sessions', COUNT(*) FROM ai_copilot_sessions;

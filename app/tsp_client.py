@@ -590,8 +590,197 @@ class TSPClient:
             """, training_id)
             return int(row["n"]) if row else 0
 
+    # ==================== Learner Progress Evidence (Teammate 4) ====================
 
+    async def _resolve_trainee(self, learner_id: str, training_id: str) -> Optional[dict]:
+        """Resolve a learner_id (trainee.id or user.id) to a trainee row in a training."""
+        async with self._pool.acquire() as conn:
+            return await conn.fetchrow("""
+                SELECT id, cohort_id FROM trainees
+                WHERE (id = $1::uuid OR user_id = $1::uuid) AND training_id = $2::uuid
+                LIMIT 1
+            """, learner_id, training_id)
 
+    async def get_learner_progress(self, learner_id: str, training_id: str) -> dict:
+        """
+        Aggregate real learner evidence from TSP for personalization:
+        - Attendance: sessions attended vs. recorded (attendances + sessions).
+        - Session timeline: last attended session and next unattended session in the cohort.
+        - Assessment performance: weight-normalized percentage per assessment
+          (assessment_answers.score / assessment_entries.weight), plus the weakest area.
+
+        Returns {} when the learner has no evidence in TSP — callers must treat
+        that as "no evidence available", never fabricate progress.
+        """
+        if self._pool is None:
+            return {}
+        trainee = await self._resolve_trainee(learner_id, training_id)
+        if not trainee:
+            return {}
+        trainee_id = trainee["id"]
+
+        async with self._pool.acquire() as conn:
+            att = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) FILTER (WHERE a.is_present) AS attended,
+                    COUNT(*) AS recorded
+                FROM attendances a
+                WHERE a.trainee_id = $1
+            """, trainee_id)
+
+            timeline = await conn.fetch("""
+                SELECT s.id, s.name, s.start_date, s.status,
+                       COALESCE(a.is_present, FALSE) AS is_present,
+                       (a.id IS NOT NULL) AS has_record
+                FROM sessions s
+                LEFT JOIN attendances a
+                       ON a.session_id = s.id AND a.trainee_id = $1
+                WHERE s.cohort_id = $2
+                ORDER BY s.start_date
+            """, trainee_id, trainee["cohort_id"]) if trainee["cohort_id"] else []
+
+            assessments = await conn.fetch("""
+                SELECT ass.name AS assessment_name,
+                       ass.assessment_type,
+                       ROUND((SUM(aa.score) / NULLIF(SUM(ae.weight), 0))::numeric * 100, 1) AS pct,
+                       COUNT(aa.id) AS answers
+                FROM assessment_answers aa
+                JOIN assessment_entries ae ON ae.id = aa.assessment_entry_id
+                JOIN assessment_sections sec ON sec.id = ae.section_id
+                JOIN assessments ass ON ass.id = sec.assessment_id
+                WHERE aa.trainee_id = $1 AND aa.score IS NOT NULL
+                GROUP BY ass.id, ass.name, ass.assessment_type
+                ORDER BY pct ASC NULLS LAST
+            """, trainee_id)
+
+        attended = int(att["attended"]) if att else 0
+        recorded = int(att["recorded"]) if att else 0
+
+        last_attended = None
+        next_session = None
+        for s in timeline:
+            if s["is_present"]:
+                last_attended = {"name": s["name"], "start_date": str(s["start_date"]), "status": s["status"]}
+            elif next_session is None:
+                next_session = {"name": s["name"], "start_date": str(s["start_date"]), "status": s["status"]}
+
+        assessment_results = [
+            {
+                "assessment_name": a["assessment_name"],
+                "assessment_type": a["assessment_type"],
+                "score_pct": float(a["pct"]) if a["pct"] is not None else None,
+                "answers": int(a["answers"]),
+            }
+            for a in assessments
+        ]
+        scored = [a for a in assessment_results if a["score_pct"] is not None]
+        overall_pct = round(sum(a["score_pct"] for a in scored) / len(scored), 1) if scored else None
+        weakest = next((a for a in scored if a["answers"] >= 3), None)
+
+        if not (recorded or assessment_results):
+            return {}
+
+        return {
+            "trainee_id": str(trainee_id),
+            "attendance": {
+                "attended": attended,
+                "recorded": recorded,
+                "rate": round(attended / recorded, 2) if recorded else None,
+            },
+            "last_attended_session": last_attended,
+            "next_session": next_session,
+            "assessment_results": assessment_results,
+            "overall_assessment_pct": overall_pct,
+            "weakest_assessment": weakest,
+        }
+
+    async def find_diverse_learners(self, training_id: str, limit: int = 3) -> List[dict]:
+        """
+        Pick learners in a training with real TSP evidence and (where possible)
+        distinct academic levels — used by the personalization evaluation.
+        """
+        if self._pool is None:
+            return []
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT DISTINCT ON (al.name)
+                       t.id, t.first_name, t.last_name,
+                       al.name AS academic_level,
+                       t.employment_status, t.has_training_experience,
+                       COUNT(aa.id) OVER (PARTITION BY t.id) AS answers
+                FROM trainees t
+                LEFT JOIN base_data.academic_levels al ON al.id = t.academic_level_id
+                JOIN assessment_answers aa ON aa.trainee_id = t.id
+                WHERE t.training_id = $1::uuid
+                ORDER BY al.name, t.has_training_experience DESC
+                LIMIT $2
+            """, training_id, limit)
+            return [dict(r) for r in rows]
+
+    # ==================== Copilot Session Persistence (Teammate 4) ====================
+
+    async def save_copilot_turn(
+        self,
+        session_id: str,
+        training_id: str,
+        learner_id: Optional[str],
+        role: str,
+        content: str,
+        guardrail_triggered: bool = False,
+    ) -> bool:
+        """
+        Persist one conversation turn to ai_copilot_sessions. Best-effort:
+        returns False (never raises) if the table is missing or the write fails,
+        so the copilot keeps working with in-memory sessions only.
+        """
+        if self._pool is None:
+            return False
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO ai_copilot_sessions
+                        (session_id, training_id, learner_id, role, content, guardrail_triggered)
+                    VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6)
+                """, session_id, training_id, learner_id, role, content, guardrail_triggered)
+            return True
+        except Exception:
+            return False
+
+    async def get_copilot_session_history(self, session_id: str, limit: int = 20) -> List[dict]:
+        """Load a session's turns (oldest first) from ai_copilot_sessions. Best-effort."""
+        if self._pool is None:
+            return []
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT role, content FROM ai_copilot_sessions
+                    WHERE session_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                """, session_id, limit)
+            return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        except Exception:
+            return []
+
+    async def get_recent_learner_interactions(self, learner_id: str, limit: int = 6) -> List[dict]:
+        """Most recent copilot turns for a learner across sessions (profile context)."""
+        if self._pool is None:
+            return []
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT role, content, session_id, created_at
+                    FROM ai_copilot_sessions
+                    WHERE learner_id = $1::uuid AND guardrail_triggered = FALSE
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                """, learner_id, limit)
+            return [
+                {"role": r["role"], "content": r["content"], "session_id": r["session_id"]}
+                for r in reversed(rows)
+            ]
+        except Exception:
+            return []
 
 
 

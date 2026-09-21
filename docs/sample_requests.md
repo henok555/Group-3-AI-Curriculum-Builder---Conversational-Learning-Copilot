@@ -196,11 +196,50 @@ curl -X POST http://localhost:8000/copilot/message \
   "training_id": "string (UUID, required)",
   "learner_id": "string (UUID, optional — enables personalization)",
   "question": "string (required)",
+  "session_id": "string (optional — pass the session_id from a previous response to continue that conversation server-side; omit to start a new session)",
   "conversation_history": [
     {"role": "user", "content": "previous question"},
     {"role": "assistant", "content": "previous answer"}
   ],
   "max_sources": 5
+}
+```
+
+**Multi-turn conversation (server-side session — no need to re-send history):**
+```bash
+# Turn 1 — response includes "session_id"
+curl -X POST http://localhost:8000/copilot/message \
+  -H "Content-Type: application/json" \
+  -d '{
+    "training_id": "ea7953f9-e773-4d2c-a895-b8ecf2e969ed",
+    "learner_id": "855be580-6c2e-4626-a44c-df5995e7faaf",
+    "question": "What do the financial literacy materials cover?"
+  }'
+
+# Turn 2 — same conversation, context restored from the server session
+curl -X POST http://localhost:8000/copilot/message \
+  -H "Content-Type: application/json" \
+  -d '{
+    "training_id": "ea7953f9-e773-4d2c-a895-b8ecf2e969ed",
+    "learner_id": "855be580-6c2e-4626-a44c-df5995e7faaf",
+    "question": "Can you explain that more simply?",
+    "session_id": "<session_id from turn 1 response>"
+  }'
+```
+
+**Personalized response additions** (present when `learner_id` is given):
+```json
+{
+  "session_id": "992b541e-6396-446b-b07c-cd5e1a3d04cf",
+  "personalization": {
+    "tier": "Intermediate / Applied",
+    "performance_level": "on_track",
+    "evidence_summary": "Learner evidence from TSP: attended 4/4 recorded sessions (100%); overall assessment score 71.4%."
+  },
+  "recommended_next_activity": {
+    "activity": "Attend \"Financial Literacy Training - Session 3\".",
+    "reason": "TSP shows this is the next session in your cohort schedule (2025-05-24), following \"Digital Literacy Training - Session 2\" which you already attended."
+  }
 }
 ```
 

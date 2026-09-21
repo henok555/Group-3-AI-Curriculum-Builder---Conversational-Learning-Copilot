@@ -42,6 +42,12 @@ OTHER_TRAINING  = "00000000-0000-0000-0000-000000000000"    # Non-existent train
 # catch the mismatch if Teammate 4 implements is_learner_enrolled()
 UNAUTHORIZED_LEARNER = "ffffffff-ffff-ffff-ffff-ffffffffffff"
 
+# ── Teammate 4: evidence-based personalization demo (real TSP learner) ─────
+# Leyu Data Contributors Training — 551 trainees with real attendance +
+# assessment records; this learner has a full session/assessment history.
+LEYU_DATA_TRAINING   = "ea7953f9-e773-4d2c-a895-b8ecf2e969ed"
+PERSONALIZED_LEARNER = "855be580-6c2e-4626-a44c-df5995e7faaf"
+
 # ── Page config ────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="TSP AI Service",
@@ -609,7 +615,7 @@ with tab_cop:
     st.caption("Grounded in real TSP content · Sources cited · Guardrails active")
 
     # Scenario preset buttons
-    b1, b2, b3, b4 = st.columns(4)
+    b1, b2, b3, b4, b5 = st.columns(5)
     with b1:
         st.markdown('<span class="badge badge-green">Scenario (a)</span>', unsafe_allow_html=True)
         if st.button("▶  Real question", use_container_width=True, key="cop_a"):
@@ -642,6 +648,28 @@ with tab_cop:
             st.session_state["cop_lid_in"] = UNAUTHORIZED_LEARNER
             st.session_state["trigger_cop"] = True
             st.rerun()
+    with b5:
+        st.markdown('<span class="badge badge-green">Scenario (f)</span>', unsafe_allow_html=True)
+        if st.button("▶  Personalized", use_container_width=True, key="cop_f"):
+            st.session_state["cop_q_in"] = "What do the financial literacy and soft skill materials cover?"
+            st.session_state["cop_tid_in"] = LEYU_DATA_TRAINING
+            st.session_state["cop_lid_in"] = PERSONALIZED_LEARNER
+            st.session_state["trigger_cop"] = True
+            st.rerun()
+
+    # Teammate 4: server-side multi-turn session — the copilot remembers this
+    # conversation across questions without the client re-sending history.
+    sess_col1, sess_col2 = st.columns([3, 1])
+    with sess_col1:
+        active_sid = st.session_state.get("cop_session_id")
+        if active_sid:
+            st.caption(f"🧵 Multi-turn session active: `{active_sid[:8]}…` — follow-up questions keep context")
+        else:
+            st.caption("🧵 No active session — the next question starts a new conversation")
+    with sess_col2:
+        if st.button("🔄 New conversation", use_container_width=True, key="cop_new_sess"):
+            st.session_state.pop("cop_session_id", None)
+            st.rerun()
 
     st.divider()
 
@@ -673,11 +701,16 @@ with tab_cop:
                     payload = {"training_id": cop_tid, "question": question, "max_sources": 5}
                     if cop_lid.strip():
                         payload["learner_id"] = cop_lid.strip()
+                    # Continue the server-side session if one is active (Teammate 4)
+                    if st.session_state.get("cop_session_id"):
+                        payload["session_id"] = st.session_state["cop_session_id"]
 
                     r = httpx.post(f"{api_url}/copilot/message", json=payload, timeout=120.0)
 
                     if r.status_code == 200:
                         d = r.json()
+                        if d.get("session_id"):
+                            st.session_state["cop_session_id"] = d["session_id"]
 
                         # ── Guardrail triggered ──
                         if d.get("guardrail_triggered"):
@@ -716,6 +749,25 @@ with tab_cop:
                             conf_pct = round(d.get("confidence", 0) * 100)
                             st.success(f"✅  **Scenario (a) — Answer** (confidence: {conf_pct}%)")
                             st.markdown(f'<div class="result-box">{d["answer"]}</div>', unsafe_allow_html=True)
+
+                            # ── Teammate 4: evidence-based personalization panel ──
+                            pers = d.get("personalization")
+                            rec = d.get("recommended_next_activity")
+                            if pers or rec:
+                                st.markdown("**🎯 Personalization (from real TSP records):**")
+                                if pers:
+                                    st.markdown(
+                                        f'<div class="result-box">'
+                                        f'<b>Pedagogical tier:</b> {pers.get("tier", "—")}<br>'
+                                        f'<b>Performance level:</b> {pers.get("performance_level", "—")}<br>'
+                                        f'<b>Evidence:</b> {pers.get("evidence_summary", "—")}</div>',
+                                        unsafe_allow_html=True)
+                                if rec:
+                                    st.markdown(
+                                        f'<div class="result-box">'
+                                        f'<b>📍 Recommended next activity:</b> {rec.get("activity", "")}<br>'
+                                        f'<b>Why:</b> {rec.get("reason", "")}</div>',
+                                        unsafe_allow_html=True)
 
                             srcs = d.get("sources", [])
                             if srcs:
