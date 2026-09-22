@@ -796,4 +796,4 @@ with tab_cop:
 
 # ── Footer ───────────────────────────────────────────────────────────────────
 st.divider()
-st.caption("TSP AI Service · Lead: Vini · FastAPI + asyncpg + Gemma (OpenRouter) + sentence-transformers")
+st.caption("TSP AI Service · Lead: Henok (Teammate 1) · FastAPI + asyncpg + Gemma (OpenRouter) + sentence-transformers")
