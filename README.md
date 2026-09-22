@@ -3,8 +3,13 @@
 **AI-powered add-on for the Training Solutions Platform (TSP)**
 Curriculum Builder + Conversational Copilot, grounded entirely in real TSP data.
 
-> **Built by**: Vini (Lead) · Week 5 Project
-> **Grading areas**: Problem Definition (8%) + TSP Integration (12%)
+> **Built by Group 3**:
+> - **Teammate 1 (Henok - Lead)**: TSP Database Integration, FastAPI Service Architecture, Security Guardrails
+> - **Teammate 2 (Natty)**: Curriculum Engineering, Cold-Start Synthesis & Word (.docx) Exporter
+> - **Teammate 3 (Kibrewossen)**: RAG Retrieval Engine, Document Ingestion & Quantitative Evaluation Benchmark
+> - **Teammate 4 (Abel)**: Copilot Multi-Turn Sessions, Evidence-Based Personalization & Next-Activity Engine
+> 
+> **Grading areas covered**: Problem Definition (8%) + TSP Integration (12%) + Curriculum Builder (12%) + RAG & Copilot (12%) + Personalization & Profiling (8%)
 
 ---
 
@@ -14,8 +19,8 @@ Two AI features built as a FastAPI service that reads from the real TSP PostgreS
 
 | Feature | How it works |
 |---|---|
-| **Curriculum Builder** | Fetches training profile + modules + audience from TSP → prompts Gemma → validates JSON → saves curriculum |
-| **Conversational Copilot** | Fetches learner profile → retrieves relevant content chunks → prompts Gemma with grounded context → returns answer with source attribution |
+| **Curriculum Builder** | Fetches training profile + modules + audience from TSP → prompts Gemma → validates JSON → saves curriculum (supports cold-start generation & `.docx` export) |
+| **Conversational Copilot** | Fetches learner profile → retrieves relevant content chunks → prompts Gemma with grounded context → returns answer with source attribution & personalized next-activity recommendations |
 
 Both features use **only real TSP data** — no fabricated content, no hardcoded training data.
 
@@ -31,8 +36,8 @@ Both features use **only real TSP data** — no fabricated content, no hardcoded
 ### Setup
 
 ```bash
-# 1. Navigate into this folder
-cd tsp-ai-service
+# 1. Navigate into the repository root folder
+cd Group-3-AI-Curriculum-Builder---Conversational-Learning-Copilot
 
 # 2. Create virtual environment
 python3.12 -m venv .venv && source .venv/bin/activate
@@ -44,7 +49,7 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with real DB credentials and OpenRouter key
 
-# 5. Create the two AI tables in Postgres (run once)
+# 5. Create the AI tables in Postgres (run once)
 psql -U $TSP_DB_USER -d training_solutions -f docs/db_migrations.sql
 
 # 6. Index demo training content into RAG table (run once)
@@ -72,35 +77,45 @@ Demo UI: [http://localhost:8501](http://localhost:8501)
 ## Project Structure
 
 ```
-tsp-ai-service/
+Group-3-AI-Curriculum-Builder---Conversational-Learning-Copilot/
 ├── app/
-│   ├── main.py          # FastAPI — /health, /curriculum/generate, /copilot/message
+│   ├── main.py          # FastAPI server routes (/health, /curriculum, /copilot)
 │   ├── tsp_client.py    # ONLY place that reads/writes TSP tables
-│   ├── schemas.py       # Pydantic models — Curriculum, Module, Lesson, etc.
-│   ├── llm.py           # Gemma via OpenRouter (call_gemma, call_gemma_json)
-│   └── retrieval.py     # RAG: reads ai_content_chunks, cosine similarity in Python
+│   ├── schemas.py       # Pydantic models (Curriculum, Module, Copilot, etc.)
+│   ├── llm.py           # Gemma LLM gateway via OpenRouter
+│   ├── retrieval.py     # RAG engine, sentence tokenizer, vector retrieval
+│   ├── curriculum_builder.py # Cold-start curriculum synthesis & draft enhancer
+│   ├── docx_exporter.py # Publication-grade Word (.docx) exporter
+│   └── session_store.py # Multi-turn session memory & DB hydration
 ├── scripts/
-│   └── index_content.py # Chunks + embeds accepted content → ai_content_chunks table
+│   ├── index_content.py # Index TSP accepted content → ai_content_chunks
+│   ├── evaluate_retrieval.py # Quantitative retrieval benchmarks (P@5, MRR)
+│   ├── evaluate_personalization.py # Personalization & safety diff benchmarks
+│   └── generate_curriculum.py # Standalone curriculum CLI generator
 ├── demo/
-│   └── app.py           # Streamlit demo — all 5 required scenarios
+│   └── app.py           # Streamlit UI — all 5 required grading scenarios
+├── tests/
+│   ├── test_api.py      # Integration tests for FastAPI endpoints
+│   ├── test_copilot.py  # Session memory & personalization unit tests
+│   ├── test_curriculum_builder.py # Synthesis & validation unit tests
+│   └── test_rag.py      # Tokenizer, extraction & vector similarity unit tests
 ├── docs/
-│   ├── README (this file)
-│   ├── tsp_client_contract.md    ← Teammates: read this first
-│   ├── teammate_handoff.md       ← Teammates: your build instructions
-│   ├── tsp_schema_map.md         # Real DB schema (139 tables discovered live)
-│   ├── tsp_er_diagram.md         # Mermaid ER diagram
 │   ├── architecture.md           # Full system flowchart
-│   ├── sequence_curriculum_generation.md
-│   ├── sequence_copilot_interaction.md
-│   ├── data_mapping.md           # TSP fields → AI usage
-│   ├── integration_plan.md       # Data flow + sync strategy + error handling
-│   ├── limitations.md            # 8 real limitations with reasoning
-│   ├── setup.md                  # Detailed setup guide
-│   ├── sample_requests.md        # curl examples for all endpoints
-│   ├── evaluation_plan.md        # Test set + metrics for all 4 teammates
-│   ├── contribution_statement.md # Lead's individual contribution record
-│   ├── db_migrations.sql         # SQL to create the two AI tables
-│   └── evaluation_results.md     # (create this — fill in test results)
+│   ├── contribution_statement.md # Group contribution records (all 4 members)
+│   ├── data_mapping.md           # TSP fields → AI usage mapping
+│   ├── db_migrations.sql         # SQL schema migrations for AI tables
+│   ├── evaluation_plan.md        # Evaluation protocol & metrics
+│   ├── evaluation_results.md     # Final quantitative evaluation benchmark results
+│   ├── integration_plan.md       # Data flow, sync strategy & error handling
+│   ├── limitations.md            # System limitations with engineering rationale
+│   ├── rag_and_copilot_architecture.md # RAG & Copilot detailed spec
+│   ├── sample_requests.md        # curl examples for all API endpoints
+│   ├── sequence_copilot_interaction.md # Sequence diagram for copilot
+│   ├── sequence_curriculum_generation.md # Sequence diagram for curriculum
+│   ├── setup.md                  # Comprehensive setup guide
+│   ├── tsp_client_contract.md    # TSPClient API contract
+│   ├── tsp_er_diagram.md         # Mermaid ER diagram
+│   └── tsp_schema_map.md         # Schema map (139 TSP tables)
 ├── .env.example         # Environment variable template
 ├── .gitignore
 └── requirements.txt
@@ -137,15 +152,16 @@ All 5 required grading scenarios are wired in the Streamlit demo:
 
 ---
 
-## For Teammates
+## Group Responsibilities & Architecture
 
-| Teammate | Role | Start here |
-|---|---|---|
-| Teammate 2 | Curriculum Builder | `docs/teammate_handoff.md` → Teammate 2 section |
-| Teammate 3 | RAG Pipeline | `docs/teammate_handoff.md` → Teammate 3 section |
-| Teammate 4 | Copilot & Personalization | `docs/teammate_handoff.md` → Teammate 4 section |
+| Team Member | Role & Component | Key Accomplishments | Documentation |
+|---|---|---|---|
+| **Teammate 1 (Henok - Lead)** | TSP Integration & Core Service | `asyncpg` pool, parameterization, 2-layer injection guardrails | `docs/contribution_statement.md` |
+| **Teammate 2 (Natty)** | AI Curriculum Builder & Exporter | Cold-start synthesis, multi-modal resource evaluation, Word `.docx` exporter | `docs/contribution_statement.md` |
+| **Teammate 3 (Kibrewossen)** | RAG Pipeline & Ingestion | Sentence tokenizer, MiniLM vector indexer, quantitative evaluation | `docs/rag_and_copilot_architecture.md` |
+| **Teammate 4 (Abel)** | Copilot Sessions & Personalization | Multi-turn session memory, evidence-based profiling, next-activity engine | `docs/copilot_personalization.md` |
 
-**Critical rule**: All database access must go through `TSPClient` in `app/tsp_client.py`. Never write SQL anywhere else.
+**Critical rule**: All database access must go through `TSPClient` in `app/tsp_client.py`. Never write raw SQL anywhere else in the application.
 
 ---
 
