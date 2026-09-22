@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.llm import call_gemma_json, LLMError
+from app.youtube_search import search_youtube_video
 from app.schemas import (
     GeneratedCurriculum,
     CurriculumValidationReport,
@@ -662,7 +663,7 @@ def _normalize_llm_output(data: dict) -> dict:
     return data
 
 
-def validate_and_fix_curriculum(
+async def validate_and_fix_curriculum(
     curriculum_data: dict,
     training_profile: Optional[dict] = None,
     audience: Optional[dict] = None,
@@ -791,7 +792,7 @@ def validate_and_fix_curriculum(
     _ensure_content_requests(curriculum_data, training_profile=training_profile)
 
     # ── 10. Resolve and integrate media resources (videos, YouTube links, PDFs)
-    _ensure_media_resources(curriculum_data, modules_context=modules_context, training_profile=training_profile)
+    await _ensure_media_resources(curriculum_data, modules_context=modules_context, training_profile=training_profile)
 
     return curriculum_data, report
 
@@ -1221,25 +1222,124 @@ def _derive_domain_doc_url(topic_text: str) -> tuple[str, str]:
     elif any(k in t for k in ["docker", "container", "image"]):
         return "Docker Architecture & Security Guide", "https://docs.docker.com/get-started/"
     elif any(k in t for k in ["security", "threat", "vulnerability", "ransomware", "incident", "owasp"]):
-        return "OWASP Security Standards & Incident Guidance", "https://owasp.org/"
+        return "OWASP Security Standards & Incident Guidance", "https://owasp.org/www-project-top-ten/"
     elif any(k in t for k in ["machine learning", "deep learning", "neural", "model", "scikit"]):
         return "Machine Learning & Scikit-Learn Guide", "https://scikit-learn.org/stable/user_guide.html"
+    elif any(k in t for k in ["tensorflow", "keras"]):
+        return "TensorFlow Core Documentation", "https://www.tensorflow.org/guide"
+    elif any(k in t for k in ["pytorch"]):
+        return "PyTorch Official Tutorials", "https://pytorch.org/tutorials/"
     elif any(k in t for k in ["python", "django", "fastapi"]):
         return "Python Official Documentation", "https://docs.python.org/3/"
+    elif any(k in t for k in ["javascript", "js", "node", "react", "vue", "angular"]):
+        return "MDN Web Docs – JavaScript Reference", "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide"
+    elif any(k in t for k in ["html", "css", "web development", "frontend"]):
+        return "MDN Web Docs – HTML & CSS", "https://developer.mozilla.org/en-US/docs/Learn"
     elif any(k in t for k in ["sql", "database", "postgres", "query"]):
         return "PostgreSQL & Relational DB Manual", "https://www.postgresql.org/docs/"
+    elif any(k in t for k in ["mongodb", "nosql"]):
+        return "MongoDB Official Documentation", "https://www.mongodb.com/docs/manual/"
     elif any(k in t for k in ["api", "rest", "microservice"]):
-        return "RESTful API Architectural Guidelines", "https://restfulapi.net/"
-    elif any(k in t for k in ["cloud", "aws", "azure", "gcp", "terraform"]):
+        return "RESTful API Design – Microsoft Guidelines", "https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design"
+    elif any(k in t for k in ["aws", "amazon web"]):
+        return "AWS Documentation", "https://docs.aws.amazon.com/"
+    elif any(k in t for k in ["azure"]):
+        return "Microsoft Azure Documentation", "https://learn.microsoft.com/en-us/azure/"
+    elif any(k in t for k in ["gcp", "google cloud"]):
+        return "Google Cloud Documentation", "https://cloud.google.com/docs"
+    elif any(k in t for k in ["terraform", "infrastructure as code", "iac"]):
+        return "Terraform by HashiCorp – Official Docs", "https://developer.hashicorp.com/terraform/docs"
+    elif any(k in t for k in ["cloud", "devops", "ci/cd", "pipeline"]):
         return "Cloud Architecture Best Practices", "https://learn.microsoft.com/en-us/azure/architecture/"
+    elif any(k in t for k in ["linux", "unix", "bash", "shell", "command line"]):
+        return "Linux Command Line Handbook", "https://linuxcommand.org/tlcl.php"
+    elif any(k in t for k in ["git", "github", "version control"]):
+        return "Git Official Documentation", "https://git-scm.com/doc"
+    elif any(k in t for k in ["agile", "scrum", "project management"]):
+        return "Scrum Guide – Official Reference", "https://scrumguides.org/scrum-guide.html"
     elif any(k in t for k in ["banking", "finance", "fintech", "payment", "compliance"]):
         return "Enterprise Banking & Regulatory Standards", "https://www.bis.org/bcbs/"
+    elif any(k in t for k in ["data", "analytics", "visualization", "pandas", "numpy"]):
+        return "Pandas Documentation – Data Analysis", "https://pandas.pydata.org/docs/user_guide/index.html"
+    elif any(k in t for k in ["networking", "tcp", "ip", "protocol", "cisco"]):
+        return "Cisco Networking Academy Resources", "https://www.netacad.com/courses/networking"
     else:
-        q = urllib.parse.quote_plus(topic_text[:50])
-        return f"Technical Reference Guide: {topic_text[:35]}", f"https://en.wikipedia.org/wiki/Special:Search?search={q}"
+        return "W3Schools – Web Technology Reference", "https://www.w3schools.com/"
 
 
-def _ensure_media_resources(
+# ---------------------------------------------------------------------------
+# Curated specific video resources by topic (real, specific URLs)
+# ---------------------------------------------------------------------------
+_CURATED_VIDEOS: list[tuple[list[str], str, str, str]] = [
+    # (keywords, title, url, duration)
+    (["kubernetes", "k8s"], "Kubernetes Full Course – freeCodeCamp", "https://www.youtube.com/watch?v=d6WC5n9G_sM", "4 hr"),
+    (["docker", "container"], "Docker Tutorial for Beginners – TechWorld with Nana", "https://www.youtube.com/watch?v=3c-iBn73dDE", "3 hr"),
+    (["machine learning", "ml intro"], "Machine Learning Full Course – freeCodeCamp", "https://www.youtube.com/watch?v=NWONeJKn6kc", "10 hr"),
+    (["deep learning", "neural network"], "Neural Networks & Deep Learning – 3Blue1Brown", "https://www.youtube.com/watch?v=aircAruvnKk", "20 min"),
+    (["python", "programming basics"], "Python Full Course for Beginners – Programming with Mosh", "https://www.youtube.com/watch?v=_uQrJ0TkZlc", "6 hr"),
+    (["fastapi"], "FastAPI Full Course – Amigoscode", "https://www.youtube.com/watch?v=SORiTsvnU28", "2 hr"),
+    (["django"], "Django Full Course – freeCodeCamp", "https://www.youtube.com/watch?v=F5mRW0jo-U4", "3.5 hr"),
+    (["javascript", "js fundamentals"], "JavaScript Full Course – freeCodeCamp", "https://www.youtube.com/watch?v=jS4aFq5-91M", "8 hr"),
+    (["react", "reactjs"], "React Course – Full Tutorial for Beginners – freeCodeCamp", "https://www.youtube.com/watch?v=bMknfKXIFA8", "12 hr"),
+    (["sql", "database"], "SQL Tutorial – Full Database Course – freeCodeCamp", "https://www.youtube.com/watch?v=HXV3zeQKqGY", "4.5 hr"),
+    (["postgresql", "postgres"], "PostgreSQL Full Course – Amigoscode", "https://www.youtube.com/watch?v=qw--VYLpxG4", "3 hr"),
+    (["mongodb", "nosql"], "MongoDB Crash Course – Traversy Media", "https://www.youtube.com/watch?v=-56x56UppqQ", "1.5 hr"),
+    (["api", "rest api"], "REST API Design Best Practices – freeCodeCamp", "https://www.youtube.com/watch?v=-MTSQjw5DrM", "1 hr"),
+    (["security", "cybersecurity"], "Cybersecurity Full Course – simplilearn", "https://www.youtube.com/watch?v=nzZkKoREEGo", "9 hr"),
+    (["owasp", "web security"], "OWASP Top 10 Explained – David Bombal", "https://www.youtube.com/watch?v=_Z9RQSnf8-g", "1 hr"),
+    (["cloud", "cloud computing"], "Cloud Computing Full Course – simplilearn", "https://www.youtube.com/watch?v=M988_fsOSWo", "11 hr"),
+    (["aws", "amazon web"], "AWS Certified Cloud Practitioner – freeCodeCamp", "https://www.youtube.com/watch?v=SOTamWNgDKc", "13 hr"),
+    (["azure"], "Microsoft Azure Fundamentals (AZ-900) – freeCodeCamp", "https://www.youtube.com/watch?v=NKEFWyqJ5XA", "3 hr"),
+    (["devops", "ci/cd", "pipeline"], "DevOps Roadmap – TechWorld with Nana", "https://www.youtube.com/watch?v=9pZ2xmsSDdo", "3 hr"),
+    (["git", "github", "version control"], "Git and GitHub for Beginners – freeCodeCamp", "https://www.youtube.com/watch?v=RGOj5yH7evk", "1 hr"),
+    (["linux", "bash", "shell"], "Linux for Beginners – tutoriaLinux", "https://www.youtube.com/watch?v=sWbUDq4S6Y8", "5 hr"),
+    (["agile", "scrum"], "Agile Scrum Full Course – Simplilearn", "https://www.youtube.com/watch?v=gy1c4_YixCo", "3 hr"),
+    (["data analysis", "pandas", "numpy"], "Data Analysis with Python – freeCodeCamp", "https://www.youtube.com/watch?v=r-uOLxNrNk8", "4 hr"),
+    (["tensorflow", "keras"], "TensorFlow 2.0 Complete Course – freeCodeCamp", "https://www.youtube.com/watch?v=tPYj3fFJGjk", "7 hr"),
+    (["networking", "tcp", "protocol", "cisco"], "Computer Networking Full Course – freeCodeCamp", "https://www.youtube.com/watch?v=qiQR5rTSshw", "12 hr"),
+    (["terraform"], "Terraform Course for Beginners – freeCodeCamp", "https://www.youtube.com/watch?v=SLB_c_ayRMo", "2.5 hr"),
+    (["microservice", "microservices"], "Microservices Architecture – freeCodeCamp", "https://www.youtube.com/watch?v=lTAcCNbJ7KE", "2 hr"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Curated specific lab/hands-on resources by topic (real repos / platforms)
+# ---------------------------------------------------------------------------
+_CURATED_LABS: list[tuple[list[str], str, str, str]] = [
+    # (keywords, title, url, duration)
+    (["kubernetes", "k8s"], "Kubernetes by Example – Interactive Labs", "https://kubernetesbyexample.com/", "45 min"),
+    (["docker", "container"], "Play with Docker – Browser-Based Lab", "https://labs.play-with-docker.com/", "30 min"),
+    (["machine learning", "ml", "scikit"], "Kaggle ML Micro-Courses – Hands-On Notebooks", "https://www.kaggle.com/learn", "Self-paced"),
+    (["deep learning", "neural", "tensorflow", "pytorch"], "Fast.ai Practical Deep Learning", "https://course.fast.ai/", "Self-paced"),
+    (["python"], "Exercism Python Track – Practice Exercises", "https://exercism.org/tracks/python", "Self-paced"),
+    (["fastapi", "api", "rest"], "FastAPI Official Tutorial – Interactive", "https://fastapi.tiangolo.com/tutorial/", "2 hr"),
+    (["sql", "database", "postgres"], "SQLZoo – Interactive SQL Practice", "https://sqlzoo.net/", "Self-paced"),
+    (["mongodb", "nosql"], "MongoDB University – Free Courses", "https://learn.mongodb.com/", "Self-paced"),
+    (["javascript", "js"], "The Odin Project – JavaScript Path", "https://www.theodinproject.com/paths/full-stack-javascript", "Self-paced"),
+    (["react"], "React Official Tutorial – Tic-Tac-Toe", "https://react.dev/learn/tutorial-tic-tac-toe", "2 hr"),
+    (["git", "github", "version control"], "Learn Git Branching – Visual Interactive", "https://learngitbranching.js.org/", "1 hr"),
+    (["linux", "bash", "shell"], "OverTheWire: Bandit – Linux CLI Practice", "https://overthewire.org/wargames/bandit/", "Self-paced"),
+    (["security", "cybersecurity", "owasp"], "TryHackMe – OWASP Top 10 Room", "https://tryhackme.com/room/owasptop10", "4 hr"),
+    (["networking", "tcp", "protocol"], "Cisco Packet Tracer Labs – Networking Simulation", "https://www.netacad.com/courses/packet-tracer", "Self-paced"),
+    (["aws"], "AWS Skill Builder – Free Labs", "https://skillbuilder.aws/", "Self-paced"),
+    (["azure"], "Microsoft Learn – Azure Sandbox Labs", "https://learn.microsoft.com/en-us/training/azure/", "Self-paced"),
+    (["gcp", "google cloud"], "Google Cloud Skills Boost – Qwiklabs", "https://www.cloudskillsboost.google/", "Self-paced"),
+    (["devops", "ci/cd", "pipeline"], "KodeKloud DevOps Playground", "https://kodekloud.com/playgrounds/", "Self-paced"),
+    (["terraform", "iac"], "HashiCorp Terraform Tutorials – Interactive", "https://developer.hashicorp.com/terraform/tutorials", "Self-paced"),
+    (["data analysis", "pandas", "numpy"], "Kaggle Python & Pandas Courses", "https://www.kaggle.com/learn/pandas", "4 hr"),
+    (["agile", "scrum"], "Scrum.org Open Assessments – Free Practice", "https://www.scrum.org/open-assessments", "1 hr"),
+]
+
+
+def _match_curated(t: str, catalog: list[tuple[list[str], str, str, str]]) -> tuple[str, str, str] | None:
+    """Return (title, url, duration) from catalog if any keyword matches topic text t."""
+    for keywords, title, url, duration in catalog:
+        if any(kw in t for kw in keywords):
+            return title, url, duration
+    return None
+
+
+async def _ensure_media_resources(
     data: dict,
     modules_context: Optional[list[dict]] = None,
     training_profile: Optional[dict] = None,
@@ -1325,24 +1425,42 @@ def _ensure_media_resources(
             l_id = lesson.get("id", "l")
             existing_urls = {r.get("url") for r in lesson_res if r.get("url")}
 
-            # 1. Primary Video Lecture (Visual & Architecture Demonstration)
-            yt_query = urllib.parse.quote_plus(f"{training_title} {l_name} lecture tutorial")
-            yt_url = f"https://www.youtube.com/results?search_query={yt_query}"
-            if yt_url not in existing_urls:
+            topic_key = f"{training_title} {mod_name} {l_name}".lower()
+            yt_query = f"{l_name} {mod_name} tutorial course"
+
+            # 1. Primary Video Lecture — live YouTube search, curated list as fallback
+            yt_live = await search_youtube_video(yt_query)
+            if yt_live:
+                vid_name = yt_live["name"]
+                channel = yt_live.get("channel", "")
+                if channel:
+                    vid_name = f"{vid_name} – {channel}"
+                vid_url = yt_live["url"]
+                vid_duration = yt_live.get("duration_approx", "varies")
+            else:
+                # Fallback: curated static list
+                vid_match = _match_curated(topic_key, _CURATED_VIDEOS)
+                if vid_match:
+                    vid_name, vid_url, vid_duration = vid_match
+                else:
+                    vid_name = f"Full Course: {l_name} – freeCodeCamp"
+                    vid_url = "https://www.youtube.com/@freecodecamp/search?query=" + urllib.parse.quote_plus(l_name)
+                    vid_duration = "varies"
+            if vid_url not in existing_urls:
                 lesson_res.append({
                     "id": f"res-vid-{l_id}",
-                    "name": f"Video Masterclass: {l_name}",
+                    "name": vid_name,
                     "file_type": "VIDEO",
-                    "url": yt_url,
-                    "description": f"Curated video lecture and technical walkthrough for {l_name}.",
+                    "url": vid_url,
+                    "description": f"Structured video lecture and technical walkthrough for {l_name}.",
                     "pedagogy_notes": "⭐ Top Visual Pick: Recommended for foundational concept demonstration, workflow visualization, and real-world system architecture walkthroughs.",
                     "difficulty_level": "Intermediate",
-                    "estimated_time": "25 mins",
+                    "estimated_time": vid_duration,
                     "is_primary": True,
                 })
 
-            # 2. Authoritative Standards & Documentation (Production Compliance)
-            doc_name, doc_url = _derive_domain_doc_url(f"{training_title} {mod_name} {l_name}")
+            # 2. Authoritative Standards & Documentation
+            doc_name, doc_url = _derive_domain_doc_url(topic_key)
             if doc_url not in existing_urls:
                 lesson_res.append({
                     "id": f"res-doc-{l_id}",
@@ -1356,19 +1474,25 @@ def _ensure_media_resources(
                     "is_primary": False,
                 })
 
-            # 3. Hands-on Practice Lab / Code Sandbox (Kinesthetic Execution)
-            gh_query = urllib.parse.quote_plus(f"{l_name} lab tutorial code")
-            lab_url = f"https://github.com/search?q={gh_query}&type=repositories"
+            # 3. Hands-on Practice Lab – curated specific interactive platform
+            lab_match = _match_curated(topic_key, _CURATED_LABS)
+            if lab_match:
+                lab_name, lab_url, lab_duration = lab_match
+            else:
+                # Fallback: Exercism generic tracks (real platform, not search)
+                lab_name = f"{l_name} – Practice on Exercism"
+                lab_url = "https://exercism.org/"
+                lab_duration = "Self-paced"
             if lab_url not in existing_urls:
                 lesson_res.append({
                     "id": f"res-lab-{l_id}",
-                    "name": f"Hands-On Lab & Practical Sandbox: {l_name}",
+                    "name": lab_name,
                     "file_type": "LAB",
                     "url": lab_url,
-                    "description": f"Executable code examples, scenario troubleshooting setups, and exercise tasks.",
+                    "description": f"Interactive hands-on exercises and guided practice for {l_name}.",
                     "pedagogy_notes": "Practical Kinesthetic: Best for hands-on application, scenario triage exercises, and interactive simulation.",
                     "difficulty_level": "Intermediate",
-                    "estimated_time": "35 mins practical",
+                    "estimated_time": lab_duration,
                     "is_primary": False,
                 })
 
@@ -1503,7 +1627,7 @@ async def generate_curriculum(
         len(raw.get("modules", [])),
     )
 
-    fixed, report = validate_and_fix_curriculum(
+    fixed, report = await validate_and_fix_curriculum(
         raw,
         training_profile=training_profile,
         audience=audience,
