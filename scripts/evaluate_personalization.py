@@ -203,7 +203,7 @@ async def run(training_id: str, question: str, output: str):
     out_path = Path(output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report, encoding="utf-8")
-    print(f"✓ Saved personalization evaluation to {output}")
+    print(f"[OK] Saved personalization evaluation to {output}")
     print(report[:1500])
 
 
