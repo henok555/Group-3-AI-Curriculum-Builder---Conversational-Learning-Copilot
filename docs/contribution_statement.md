@@ -1,6 +1,6 @@
-# Individual Contribution Statement — Lead Architect
+# Individual Contribution Statement — Teammate 1 (Henok - Lead Architect)
 
-**Name**: Vini (Lead)  
+**Name**: Henok (Teammate 1 - Lead)  
 **Role**: TSP Integration, Service Architecture, Security Guardrails, RAG Pipeline & Handoff  
 **Target System**: TSP AI Service (`tsp-ai-service/`)  
 
@@ -28,6 +28,38 @@
 ### 4. Automated Testing Suite (`tests/test_api.py`)
 * Wrote 8 comprehensive integration tests against the live database (100% passing).
 * Covered `/health` monitoring, regex & LLM injection guardrails, fallback behavior, cross-training authorization checks, malformed request validation (422), and curriculum save idempotency.
+
+---
+
+# Individual Contribution Statement — AI Curriculum Builder & Exporter
+
+**Name**: Teammate 2  
+**Role**: AI Curriculum Builder, Cold-Start Synthesis Engine, Word (.docx) Exporter, AI Drafting Assistant  
+**Target System**: TSP AI Service (`tsp-ai-service/`)  
+
+---
+
+## Technical Accomplishments & Key Contributions
+
+### 1. Cold-Start Curriculum Generation from Scratch (`app/curriculum_builder.py` & `app/main.py`)
+* Implemented `POST /curriculum/generate-custom` endpoint and `CustomCurriculumRequest` schema.
+* Designed synthesis pipeline in `app/curriculum_builder.py` so LLM infers module divisions, pacing, Bloom’s taxonomy objectives, rubrics, quizzes, and surveys purely from custom title, rationale, and scope.
+* Integrated DB persistence: custom curriculums automatically create corresponding rows in `trainings` table and persist full JSON in `ai_generated_curricula`.
+
+### 2. Multi-Modal Candidate Resources & Pedagogy Evaluation (`app/schemas.py` & `demo/app.py`)
+* Upgraded `MediaResource` schema to support multi-modal learning categories (`VIDEO`, `DOCS`, `LAB`).
+* Added evaluative metadata fields: `is_primary`, `difficulty_level`, `estimated_time`, and `pedagogy_notes`.
+* Implemented rich visual cards in Streamlit UI with badges (`⭐ [Top Recommendation]`, `[DOCS]`, `[LAB]`) and video previews.
+
+### 3. AI Drafting Assistant (`app/curriculum_builder.py` & `app/main.py`)
+* Built `enhance_course_draft()` and exposed `POST /curriculum/enhance-draft`.
+* Polishes spelling/tone, expands problem statements into business rationale with ROI metrics, structures technical scope boundaries, and recommends concrete prerequisites.
+* Added interactive **✨ AI Assist: Polish & Expand Draft** button in Streamlit UI.
+
+### 4. Publication-Ready Word (.docx) Export Engine (`app/docx_exporter.py`)
+* Built standalone document generator using `python-docx` creating publication-grade Word documents.
+* Designed layout with styled tables, headers, executive summaries, lesson outlines, rubrics, and survey instruments.
+* Exposed via `POST /curriculum/export-docx` and integrated one-click download in Streamlit UI.
 
 ---
 
